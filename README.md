@@ -5,7 +5,7 @@
 1. 建立 container
 ```bash
 cd frontend/docker
-docker build -t LLM-Router-Server-Dashboard .
+docker build -t llm-router-server-dashboard .
 ```
 建立 image 後
 ```bash
