@@ -79,6 +79,7 @@ def launch_single_llm_model(model_name: str, config_path: str):
     if "VLLM_WORKER_MULTIPROC_METHOD" not in cuda_env:
         print("設定 VLLM_WORKER_MULTIPROC_METHOD 為 'spawn'")
         cuda_env["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
+    cuda_env["TORCH_CUDA_ARCH_LIST"] = "8.0"
     log_path = f"./logs/{model_name}.log"
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
     with open(log_path, "w", encoding="utf-8") as f:

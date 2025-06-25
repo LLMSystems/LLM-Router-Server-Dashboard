@@ -79,15 +79,28 @@
         <el-table-column prop="username" label="使用者" width="100" />
         <el-table-column prop="nvidia_smi_name" label="nvidia-smi 名稱" width="150" />
         <el-table-column prop="name" label="處理程序名稱" width="120" />
-        <el-table-column prop="used_memory_mib" label="顯存 (MiB)" width="120" />
+        <el-table-column prop="used_memory_mib" label="顯存 (GB)" width="120">
+          <template #default="scope">
+            {{ (scope.row.used_memory_mib / 1024).toFixed(2) }}
+          </template>
+        </el-table-column>
         <el-table-column label="指令行">
           <template #default="scope">
-            <el-tooltip :content="scope.row.cmdline.join(' ')" placement="top-start">
-              <span style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; max-width: 300px;">
-                {{ scope.row.cmdline.join(' ').slice(0, 60) }}...
-              </span>
-            </el-tooltip>
-          </template>
+          <el-tooltip 
+            v-if="Array.isArray(scope.row.cmdline)" 
+            :content="scope.row.cmdline.join(' ')" 
+            placement="top-start"
+          >
+            <span 
+              style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; max-width: 300px;"
+            >
+              {{ scope.row.cmdline.join(' ').slice(0, 60) }}...
+            </span>
+          </el-tooltip>
+          <span v-else>
+            無命令列資訊
+          </span>
+        </template>
         </el-table-column>
       </el-table>
     </div>
