@@ -1,7 +1,7 @@
 <template>
   <div class="container">
     <h1 class="title">LLM Router Server 模型啟動控制面板</h1>
-    <el-card v-if="server.host" class="system-info-card" shadow="hover">
+    <el-card v-if="server.host" class="system-info-card" shadow="hover" style="max-width: 600px;">
       <template #header>
         <strong>系統設定</strong>
       </template>
