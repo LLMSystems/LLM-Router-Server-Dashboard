@@ -5,6 +5,23 @@ import psutil
 import json
 import time
 
+
+def get_username_from_ps(pid):
+    try:
+        result = subprocess.run(
+            ["ps", "-o", "user=", "-p", str(pid)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+        else:
+            return None
+    except Exception:
+        return None
+
+
 def get_gpu_processes_with_info():
     cmd = [
         "nvidia-smi",
@@ -53,9 +70,20 @@ def get_gpu_processes_with_info():
                 "username": p.username()
             })
         except psutil.NoSuchProcess:
-            process_info["error"] = "No such process"
-        except Exception as e:
-            process_info["error"] = str(e)
+            username = get_username_from_ps(pid)
+            if username:
+                process_info["username"] = username
+                process_info["error"] = "psutil failed, fallback to ps"
+            else:
+                process_info["error"] = "No such process"
+        except psutil.AccessDenied:
+            username = get_username_from_ps(pid)
+            if username:
+                process_info["username"] = username
+                process_info["error"] = "Access denied, fallback to ps"
+            else:
+                process_info["error"] = "Access denied"
+
 
         processes.append(process_info)
     
