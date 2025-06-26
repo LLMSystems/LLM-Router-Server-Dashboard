@@ -36,14 +36,29 @@ const form = ref({
   password: ''
 })
 
+const defaultAdmin = {
+  username: 'admin',
+  password: 'admin123'
+}
+
 function handleLogin() {
-  if (form.value.username && form.value.password) {
+  if (!form.value.username || !form.value.password) {
+    ElMessage.error('請輸入帳號與密碼')
+    return
+  }
+
+  if (
+    form.value.username === defaultAdmin.username &&
+    form.value.password === defaultAdmin.password
+  ) {
+    ElMessage.success('登入成功')
     emit('login', form.value.username)
   } else {
-    ElMessage.error('請輸入帳號與密碼')
+    ElMessage.error('帳號或密碼錯誤')
   }
 }
 </script>
+
 
 <style scoped>
 .login-container {
