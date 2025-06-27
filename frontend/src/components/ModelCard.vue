@@ -1,5 +1,6 @@
 <template>
   <el-card class="mb-4">
+    <!-- Header -->
     <template #header>
       <el-space class="w-full justify-between" alignment="center">
         <strong>{{ model.name }}</strong>
@@ -7,6 +8,7 @@
       </el-space>
     </template>
 
+    <!-- Descriptions -->
     <el-descriptions :column="1" border size="small">
       <el-descriptions-item v-if="model.port" label="Port">{{ model.port }}</el-descriptions-item>
       <el-descriptions-item v-if="model.cuda_device !== undefined" label="GPU">{{ model.cuda_device }}</el-descriptions-item>
@@ -27,48 +29,95 @@
 
     <!-- 操作按鈕 -->
     <el-divider class="my-4" content-position="left">操作</el-divider>
-      <div class="text-right">
-        <el-button
-          type="success"
-          :disabled="model.status === '啟動中' || model.status === '已啟動'"
-          @click="$emit('start', model.name)"
-        >
-          ▶ 啟動
-        </el-button>
-        <el-button
-          type="danger"
-          :disabled="model.status === '未啟動'"
-          @click="$emit('stop', model.name)"
-        >
-          ⏹ 關閉
-        </el-button>
-      </div>
+    <div class="text-right">
+      <el-button
+        type="success"
+        :disabled="model.status === '啟動中' || model.status === '已啟動'"
+        @click="openPasswordDialog('start')"
+      >
+        ▶ 啟動
+      </el-button>
+      <el-button
+        type="danger"
+        :disabled="model.status === '未啟動'"
+        @click="openPasswordDialog('stop')"
+      >
+        ⏹ 關閉
+      </el-button>
+    </div>
+
+    <!-- 密碼對話框 -->
+    <el-dialog v-model="dialogVisible" title="請輸入密碼" width="300px" @close="resetDialog">
+      <el-input
+        v-model="passwordInput"
+        type="password"
+        show-password
+        placeholder="輸入操作密碼"
+      />
+      <template #footer>
+        <el-button @click="dialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="confirmOperation">確認</el-button>
+      </template>
+    </el-dialog>
   </el-card>
 </template>
 
-<script setup>
+
+<script setup lang="ts">
+import { ref } from 'vue'
+import { ElMessage } from 'element-plus'
+
+
+const correctPassword = import.meta.env.VITE_MODEL_CONTROL_PASSWORD
+
 const props = defineProps({
   model: {
     type: Object,
     required: true
   }
 })
+const emit = defineEmits(['start', 'stop'])
 
 function tagType(status) {
   switch (status) {
-    case '已啟動':
-      return 'success'
-    case '啟動中':
-      return 'warning'
-    case '未啟動':
-      return 'info'
-    case '錯誤':
-      return 'danger'
-    default:
-      return 'default'
+    case '已啟動': return 'success'
+    case '啟動中': return 'warning'
+    case '未啟動': return 'info'
+    case '錯誤': return 'danger'
+    default: return 'default'
+  }
+}
+
+const dialogVisible = ref(false)
+const passwordInput = ref('')
+const pendingAction = ref<'start' | 'stop' | null>(null)
+
+function openPasswordDialog(action: 'start' | 'stop') {
+  pendingAction.value = action
+  dialogVisible.value = true
+}
+
+
+function resetDialog() {
+  passwordInput.value = ''
+  pendingAction.value = null
+}
+
+function confirmOperation() {
+  if (passwordInput.value === correctPassword) {
+    if (pendingAction.value === 'start') {
+      emit('start', props.model.name)
+    } else if (pendingAction.value === 'stop') {
+      emit('stop', props.model.name)
+    }
+    dialogVisible.value = false
+    resetDialog()
+  } else {
+    ElMessage.error('密碼錯誤')
   }
 }
 </script>
+
 
 <style scoped>
 .card-details {
