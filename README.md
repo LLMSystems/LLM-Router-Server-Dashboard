@@ -5,6 +5,10 @@
 
 [English](README.md) | [中文](README_zh-CN.md)
 
+![Main Console](assets/image0.png)
+
+![Model Management](assets/image1.png)
+
 </div>
 
 ---
@@ -220,16 +224,6 @@ embedding_server:
 | `tensor_parallel_size` | Multi-GPU parallelism count | Number of GPUs |
 | `dtype` | Inference precision | float16 (faster) / bfloat16 (more stable) |
 | `cuda_device` | GPU device number | 0, 1, 2... |
-
----
-
-## Screenshots
-
-### Main Console
-![Main Console](assets/image0.png)
-
-### Model Management
-![Model Management](assets/image1.png)
 
 ---
 

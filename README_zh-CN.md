@@ -3,6 +3,10 @@
 # LLM-Router-Server-Dashboard
 **一站式 LLM 模型管理與監控平台**
 
+![主控台](assets/image0.png)
+
+![模型管理](assets/image1.png)
+
 </div>
 
 ---
@@ -218,16 +222,6 @@ embedding_server:
 | `tensor_parallel_size` | 多 GPU 並行數 | GPU 數量 |
 | `dtype` | 推理精度 | float16（速度快） / bfloat16（更穩定） |
 | `cuda_device` | GPU 設備編號 | 0, 1, 2... |
-
----
-
-## 截圖展示
-
-### 主控台界面
-![主控台](assets/image0.png)
-
-### 模型管理
-![模型管理](assets/image1.png)
 
 ---
 
