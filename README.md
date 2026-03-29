@@ -129,13 +129,13 @@ uvicorn main:app --reload --host 0.0.0.0 --port 5000
 ```
 
 ### LLM-Router-Server Deployment
-
+For installation and startup details, refer to [LLM-Router-Server Startup Guide](LLM-Router-Server/README.md)
 #### 1. Start Router Server in Container
 
 ```bash
 cd /app/LLM-Router-Server
 pip install -r requirements.txt
-sh start_router_server.sh /app/backend/config.yaml
+sh scripts/start_all.sh /app/backend/config.yaml ./configs/gunicorn.conf.py
 ```
 
 **Note**: Use `/app/backend/config.yaml` as the unified configuration file to ensure consistency between frontend and backend.
@@ -167,15 +167,23 @@ server:
 
 # LLM model configuration
 LLM_engines:
-  Qwen3-0.6B:                          # Model name (unique identifier)
-    model_tag: "Qwen/Qwen3-0.6B"       # HuggingFace model path or local path
-    host: "localhost"                   # Service listening address
-    port: 8002                          # Service port
-    dtype: "float16"                    # Data type (float16/bfloat16/auto)
-    max_model_len: 1000                 # Maximum sequence length
-    gpu_memory_utilization: 0.6         # GPU memory utilization (0.0-1.0)
-    tensor_parallel_size: 1             # Tensor parallel size (multi-GPU)
-    cuda_device: 0                      # GPU device specification
+  Qwen3-0.6B:
+    instances:
+      - id: "qwen3"
+        host: "localhost"
+        port: 8002
+        cuda_device: 0
+      - id: "qwen3-2"
+        host: "localhost"
+        port: 8004
+        cuda_device: 0
+
+    model_config:
+      model_tag: "Qwen/Qwen3-0.6B"
+      dtype: "float16"
+      max_model_len: 500
+      gpu_memory_utilization: 0.35
+      tensor_parallel_size: 1
 
 # Embedding server configuration (optional)
 embedding_server:
@@ -211,114 +219,6 @@ embedding_server:
 | `tensor_parallel_size` | Multi-GPU parallelism count | Number of GPUs |
 | `dtype` | Inference precision | float16 (faster) / bfloat16 (more stable) |
 | `cuda_device` | GPU device number | 0, 1, 2... |
-
----
-
-## API Documentation
-
-### Backend Management API (Port 5000)
-
-#### 1. Configuration Management
-
-**Get Full Configuration**
-```http
-GET /api/config
-```
-
-**Update Configuration**
-```http
-PUT /api/config
-Content-Type: application/json
-
-{
-  "server": {...},
-  "LLM_engines": {...}
-}
-```
-
-#### 2. Model Status
-
-**Get All Model Status**
-```http
-GET /api/status
-```
-
-Response Example:
-```json
-{
-  "Qwen3-0.6B": {
-    "status": "running",
-    "port": 8002,
-    "pid": 12345,
-    "gpu": 0
-  }
-}
-```
-
-#### 3. LLM Management
-
-**Start LLM Model**
-```http
-POST /api/llm/start/{model_name}
-```
-
-**Stop LLM Model**
-```http
-POST /api/llm/stop/{model_name}
-```
-
-#### 4. System Information
-
-**Get GPU Information**
-```http
-GET /api/system/gpu
-```
-
-**Get System Resources**
-```http
-GET /api/system/resources
-```
-
-### LLM-Router-Server API
-
-Fully compatible with OpenAI API format.
-
-**Chat Completions**
-```http
-POST /v1/chat/completions
-Content-Type: application/json
-
-{
-  "model": "Qwen3-0.6B",
-  "messages": [
-    {"role": "user", "content": "Hello!"}
-  ],
-  "stream": true
-}
-```
-
-**Completions**
-```http
-POST /v1/completions
-Content-Type: application/json
-
-{
-  "model": "Qwen3-0.6B",
-  "prompt": "Once upon a time",
-  "max_tokens": 100
-}
-```
-
-**Embeddings**
-```http
-POST /v1/embeddings
-Content-Type: application/json
-
-{
-  "model": "m3e-base",
-  "input": "Hello world"
-}
-```
 
 ---
 
