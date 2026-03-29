@@ -11,9 +11,9 @@
 
 ## Project Overview
 
-**LLM-Router-Server-Dashboard** is a comprehensive solution for large language model (LLM) deployment and management, providing an intuitive web interface to manage, monitor, and operate multiple LLM model instances.
+**LLM-Router-Server-Dashboard** is a solution for large language model (LLM) deployment and management, providing an intuitive web interface to manage, monitor, and operate multiple LLM model instances.
 
-This project combines a powerful routing server (LLM-Router-Server) with an easy-to-use management interface, enabling you to:
+This project combines a routing server (LLM-Router-Server) with an easy-to-use management interface, enabling you to:
 - **Visual Management**: Easily manage multiple models through a web interface
 - **Dynamic Control**: Start and stop models in real-time without service restarts
 - **Real-time Monitoring**: Monitor model status, GPU utilization, and system information
