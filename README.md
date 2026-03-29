@@ -29,6 +29,7 @@ This project combines a routing server (LLM-Router-Server) with an easy-to-use m
   - Support for managing multiple LLM models simultaneously (based on vLLM)
   - Support for Embedding and Reranking models
   - Independent model lifecycle management (start/stop)
+  - Automatically selects the least-loaded instance based on real-time metrics (running requests, waiting requests, KV cache usage)
 
 - **Visual Control Panel**
   - Real-time display of model running status
