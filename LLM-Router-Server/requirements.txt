@@ -1,3 +1,3 @@
-vllm==0.9.1
-flashinfer-python==0.2.6.post1
+vllm==0.11.2
+transformers==4.57.3
 gunicorn
