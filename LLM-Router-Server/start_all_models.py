@@ -9,9 +9,9 @@ from typing import Dict
 
 from vllm.logger import init_logger
 
-from app.config_loader import load_config
-from app.env import env_setup
-from app.vllm_launcher import build_cli_args_from_dict
+from src.llm_router.config_loader import load_config
+from src.llm_router.env import env_setup
+from src.llm_router.vllm_launcher import build_cli_args_from_dict
 
 logger = init_logger(__name__)
 
@@ -35,8 +35,6 @@ def wait_for_model_ready(log_path, timeout=600, model_name=""):
         time.sleep(2)
     return False
 
-
-
 def launch_all_models(config_path):
     env_setup()
     config = load_config(path=config_path)
@@ -46,44 +44,75 @@ def launch_all_models(config_path):
         logger.warning("未設定任何 LLM 引擎，跳過啟動模型。")
     else:
         logger.info(f"找到 {len(engines)} 個 LLM 引擎，準備啟動...")
-        for model_name, model_cfg in engines.items():
-            try:
-                model_cfg_cleaned = copy.deepcopy(model_cfg)
-                if model_cfg_cleaned.get("tensor_parallel_size", 1) == 1:
-                    cuda_id = model_cfg_cleaned.pop("cuda_device", None)
+    for model_name, model_group_cfg in engines.items():
+        try:
+            instances = model_group_cfg.get("instances", [])
+            shared_model_cfg = model_group_cfg.get("model_config", {})
+            if not instances:
+                logger.info(f"Model group '{model_name}' has no instances defined.")
+                continue
+            logger.info(f"Model group '{model_name}' has {len(instances)} instance(s).")
+            
+            for instance in instances:
+                try:
+                    instance_id = instance.get("id")
+                    if not instance_id:
+                        raise ValueError(f"{model_name} 的 instance 缺少 id 欄位")
+                    merged_cfg = copy.deepcopy(shared_model_cfg)
+                    merged_cfg.update(copy.deepcopy(instance))
                     
-                cli_args = build_cli_args_from_dict(model_cfg_cleaned)
-                logger.info(f"執行指令: vllm {' '.join(cli_args)}")
-                cuda_env = os.environ.copy()
-                if cuda_id is not None:
-                    cuda_env["CUDA_VISIBLE_DEVICES"] = str(cuda_id)
-                    logger.warning(f"設定 {model_name} 使用 GPU {cuda_id}")
-                    
-                log_path = f"./logs/{model_name}.log"
-                os.makedirs(os.path.dirname(log_path), exist_ok=True)
+                    cuda_id = None
+                    if merged_cfg.get("tensor_parallel_size", 1) == 1:
+                        cuda_id = merged_cfg.pop("cuda_device", None)
+                        
+                    # pop id
+                    merged_cfg.pop("id", None)
 
-                if os.path.exists(log_path) and os.path.getsize(log_path) > 0:
-                    logger.info(f"{model_name} 的 log 檔案已存在且不為空，將清空。")
-                    with open(log_path, "w", encoding="utf-8") as f:
-                        f.truncate(0)
+                    cli_args = build_cli_args_from_dict(merged_cfg)
 
-                with open(log_path, "w") as log_file:
-                    proc = subprocess.Popen(
-                        ["vllm"] + cli_args,
-                        env=cuda_env,
-                        stdout=log_file,
-                        stderr=subprocess.STDOUT,
-                        start_new_session=True
+                    logger.info(
+                        f"執行指令 [{model_name}/{instance_id}]: vllm {' '.join(cli_args)}"
                     )
-                running_processes[model_name] = proc
-                logger.info(f"等待 {model_name} 啟動完成...")
-                if wait_for_model_ready(log_path, model_name=model_name):
-                    logger.info(f"{model_name} 啟動完成，繼續下一個模型。")
-                else:
-                    logger.warning(f"{model_name} 啟動超時，可能啟動失敗。")
-            except Exception as e:
-                logger.error(f"啟動模型 {model_name} 時發生錯誤: {e}")
+                    cuda_env = os.environ.copy()
+                    if cuda_id is not None:
+                        cuda_env["CUDA_VISIBLE_DEVICES"] = str(cuda_id)
+                        logger.info(
+                            f"設定 {model_name}/{instance_id} 使用 GPU {cuda_id}"
+                        )
+
+                    log_path = f"./logs/{model_name}__{instance_id}.log"
+                    os.makedirs(os.path.dirname(log_path), exist_ok=True)
                     
+                    if os.path.exists(log_path) and os.path.getsize(log_path) > 0:
+                        logger.info(
+                            f"{model_name}/{instance_id} 的 log 檔案已存在且不為空，將清空。"
+                        )
+                        with open(log_path, "w", encoding="utf-8") as f:
+                            f.truncate(0)
+
+                    with open(log_path, "w", encoding="utf-8") as log_file:
+                        proc = subprocess.Popen(
+                            ["vllm"] + cli_args,
+                            env=cuda_env,
+                            stdout=log_file,
+                            stderr=subprocess.STDOUT,
+                            start_new_session=True,
+                        )
+
+                    process_key = f"{model_name}::{instance_id}"
+                    running_processes[process_key] = proc
+
+                    logger.info(f"等待 {model_name}/{instance_id} 啟動完成...")
+                    if wait_for_model_ready(log_path, model_name=f"{model_name}/{instance_id}"):
+                        logger.info(f"{model_name}/{instance_id} 啟動完成。")
+                    else:
+                        logger.warning(f"{model_name}/{instance_id} 啟動超時，可能啟動失敗。")
+
+                except Exception as e:
+                    logger.error(f"處理 {model_name} 的 instance 時發生錯誤: {e}")
+        except Exception as e:
+            logger.error(f"處理模型群組 {model_name} 時發生錯誤: {e}")   
+              
     # embedding server
     embedding_server_cfg = config.get("embedding_server", {})
     has_embedding = bool(embedding_server_cfg.get("embedding_models"))
@@ -133,7 +162,7 @@ def main(config_path):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", type=str, default="./configs/config.yaml")
+    parser.add_argument("--config", type=str, default="./configs/configV2.yaml")
     args = parser.parse_args()
 
     config_path = args.config

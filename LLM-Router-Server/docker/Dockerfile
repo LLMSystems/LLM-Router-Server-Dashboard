@@ -11,6 +11,6 @@ RUN wget https://bootstrap.pypa.io/get-pip.py \
     && python3.11 get-pip.py \
     && rm get-pip.py
 RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1
-# RUN pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+RUN pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 WORKDIR /app
 CMD ["/bin/bash"]
