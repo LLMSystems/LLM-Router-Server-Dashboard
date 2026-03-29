@@ -127,13 +127,13 @@ uvicorn main:app --reload --host 0.0.0.0 --port 5000
 ```
 
 ### LLM-Router-Server 部署
-
+安裝&啟動細節可參考 [LLM-Router-Server 啟動指南](LLM-Router-Server/README_zh.md)
 #### 1. 在容器內啟動路由服務器
 
 ```bash
 cd /app/LLM-Router-Server
 pip install -r requirements.txt
-sh start_router_server.sh /app/backend/config.yaml
+sh scripts/start_all.sh /app/backend/config.yaml ./configs/gunicorn.conf.py
 ```
 
 **注意**：配置文件統一使用 `/app/backend/config.yaml`，確保前後端配置一致。
@@ -165,15 +165,23 @@ server:
 
 # LLM 模型配置
 LLM_engines:
-  Qwen3-0.6B:                          # 模型名稱（唯一識別符）
-    model_tag: "Qwen/Qwen3-0.6B"       # HuggingFace 模型路徑或本地路徑
-    host: "localhost"                   # 服務監聽地址
-    port: 8002                          # 服務端口
-    dtype: "float16"                    # 數據類型（float16/bfloat16/auto）
-    max_model_len: 1000                 # 最大序列長度
-    gpu_memory_utilization: 0.6         # GPU 記憶體使用率（0.0-1.0）
-    tensor_parallel_size: 1             # Tensor 並行大小（多卡）
-    cuda_device: 0                      # 指定 GPU 設備
+  Qwen3-0.6B:
+    instances:
+      - id: "qwen3"
+        host: "localhost"
+        port: 8002
+        cuda_device: 0
+      - id: "qwen3-2"
+        host: "localhost"
+        port: 8004
+        cuda_device: 0
+
+    model_config:
+      model_tag: "Qwen/Qwen3-0.6B"
+      dtype: "float16"
+      max_model_len: 500
+      gpu_memory_utilization: 0.35
+      tensor_parallel_size: 1
 
 # Embedding 服務器配置（可選）
 embedding_server:
@@ -209,114 +217,6 @@ embedding_server:
 | `tensor_parallel_size` | 多 GPU 並行數 | GPU 數量 |
 | `dtype` | 推理精度 | float16（速度快） / bfloat16（更穩定） |
 | `cuda_device` | GPU 設備編號 | 0, 1, 2... |
-
----
-
-## API 文檔
-
-### 後端管理 API (Port 5000)
-
-#### 1. 配置管理
-
-**取得完整配置**
-```http
-GET /api/config
-```
-
-**更新配置**
-```http
-PUT /api/config
-Content-Type: application/json
-
-{
-  "server": {...},
-  "LLM_engines": {...}
-}
-```
-
-#### 2. 模型狀態
-
-**取得所有模型狀態**
-```http
-GET /api/status
-```
-
-回應範例：
-```json
-{
-  "Qwen3-0.6B": {
-    "status": "running",
-    "port": 8002,
-    "pid": 12345,
-    "gpu": 0
-  }
-}
-```
-
-#### 3. LLM 管理
-
-**啟動 LLM 模型**
-```http
-POST /api/llm/start/{model_name}
-```
-
-**停止 LLM 模型**
-```http
-POST /api/llm/stop/{model_name}
-```
-
-#### 4. 系統信息
-
-**取得 GPU 資訊**
-```http
-GET /api/system/gpu
-```
-
-**取得系統資源**
-```http
-GET /api/system/resources
-```
-
-### LLM-Router-Server API
-
-完整兼容 OpenAI API 格式。
-
-**聊天完成（Chat Completions）**
-```http
-POST /v1/chat/completions
-Content-Type: application/json
-
-{
-  "model": "Qwen3-0.6B",
-  "messages": [
-    {"role": "user", "content": "Hello!"}
-  ],
-  "stream": true
-}
-```
-
-**文本完成（Completions）**
-```http
-POST /v1/completions
-Content-Type: application/json
-
-{
-  "model": "Qwen3-0.6B",
-  "prompt": "Once upon a time",
-  "max_tokens": 100
-}
-```
-
-**向量嵌入（Embeddings）**
-```http
-POST /v1/embeddings
-Content-Type: application/json
-
-{
-  "model": "m3e-base",
-  "input": "Hello world"
-}
-```
 
 ---
 

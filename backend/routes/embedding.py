@@ -1,5 +1,6 @@
+from app.launcher.embedding_launcher import (launch_embedding_server,
+                                             stop_embedding_server)
 from fastapi import APIRouter, Request
-from app.launcher.embedding_launcher import launch_embedding_server, stop_embedding_server
 
 router = APIRouter()
 

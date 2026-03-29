@@ -1,11 +1,14 @@
-from zipfile import Path
-from fastapi import APIRouter, HTTPException
-import psutil
-import subprocess
 import csv
 import io
-import os
 import json
+import logging
+import os
+import subprocess
+
+import psutil
+from fastapi import APIRouter, HTTPException
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -44,7 +47,7 @@ def get_gpu_processes_with_info():
     result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     
     if result.returncode != 0:
-        print("Error:", result.stderr)
+        logger.error("Error: %s", result.stderr)
         return []
 
     reader = csv.reader(io.StringIO(result.stdout))

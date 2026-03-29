@@ -1,46 +1,21 @@
-server:
-  host: "0.0.0.0"
-  port: 8887    
-  uvicorn_log_level: "info"  
-  loop: "uvloop"       
-
 LLM_engines:
-  # Qwen2.5-1.5B-Instruct-GPTQ-Int4-2:
-  #   model_tag: "Qwen/Qwen2.5-1.5B-Instruct-GPTQ-Int4"
-  #   host: "localhost"
-  #   port: 8001
-  #   dtype: "float16"
-  #   max_model_len: 2000
-  #   gpu_memory_utilization: 0.3
-  #   max_num_seqs: 1
-  #   quantization: "gptq"
-  #   tensor_parallel_size: 1
-  # Qwen2.5-1.5B-Instruct-GPTQ-Int4:
-  #   model_tag: "Qwen/Qwen2.5-1.5B-Instruct-GPTQ-Int4"
-  #   host: "localhost"
-  #   port: 8002
-  #   dtype: "float16"
-  #   max_model_len: 2000
-  #   gpu_memory_utilization: 0.3
-  #   max_num_seqs: 1
-  #   quantization: "gptq"
-  #   tensor_parallel_size: 1
-  #   cuda_device: 0
-  #   enable_auto_tool_choice: true
-  #   tool-call-parser: "hermes"
-  Qwen2.5-0.5B-Instruct-GPTQ-Int4:
-    model_tag: "/app/llm_learning/Qwen2.5-0.5B-Instruct-GPTQ-Int4"
-    host: "localhost"
-    port: 8002
-    dtype: "float16"
-    max_model_len: 5000
-    gpu_memory_utilization: 0.4
-    max_num_seqs: 20
-    tensor_parallel_size: 1
-    cuda_device: 0
-    enable_auto_tool_choice: true
-    tool-call-parser: "hermes"
+  Qwen3-0.6B:
+    instances:
+      - id: "qwen3"
+        host: "localhost"
+        port: 8002
+        cuda_device: 0
+      - id: "qwen3-2"
+        host: "localhost"
+        port: 8004
+        cuda_device: 0
 
+    model_config:
+      model_tag: "Qwen/Qwen3-0.6B"
+      dtype: "float16"
+      max_model_len: 500
+      gpu_memory_utilization: 0.35
+      tensor_parallel_size: 1
 
 embedding_server:
   host: "localhost"
@@ -56,13 +31,13 @@ embedding_server:
       use_gpu: true
       use_float16: true
 
-  # reranking_models:
-  #   bge-reranker-large:
-  #     model_name: "BAAI/bge-reranker-large"
-  #     model_path: "./embedding_reranker_server/embedding_engine/model/reranking_model/bge-reranker-large-model"
-  #     tokenizer_path: "./embedding_reranker_server/embedding_engine/model/reranking_model/bge-reranker-large-tokenizer"
-  #     max_length: 512
-  #     use_gpu: true
-  #     use_float16: true
+  reranking_models:
+    bge-reranker-large:
+      model_name: "BAAI/bge-reranker-large"
+      model_path: "./embedding_reranker_server/embedding_engine/model/reranking_model/bge-reranker-large-model"
+      tokenizer_path: "./embedding_reranker_server/embedding_engine/model/reranking_model/bge-reranker-large-tokenizer"
+      max_length: 512
+      use_gpu: true
+      use_float16: true
 
 

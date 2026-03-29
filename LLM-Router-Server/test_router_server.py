@@ -2,13 +2,13 @@ from openai import OpenAI
 
 client = OpenAI(
     api_key="EMPTY",  
-    base_url="http://localhost:8887/v1"
+    base_url="http://0.0.0.0:8947/v1"
 )
 
 print(client.models.list())
 
 stream = client.chat.completions.create(
-    model="Qwen2.5-0.5B-Instruct-GPTQ-Int4",
+    model="Qwen3-0.6B",
     messages=[
         {"role": "user", "content": "你好，請介紹一下你是誰？"},
     ],
@@ -22,13 +22,13 @@ for chunk in stream:
         print(delta.content, end="", flush=True)
         
 # embedding
-text = "The food was delicious and the waiter was friendly."
-response = client.embeddings.create(
-    input = [text, text],
-    model = "m3e-base"
-)
+# text = "The food was delicious and the waiter was friendly."
+# response = client.embeddings.create(
+#     input = [text, text],
+#     model = "m3e-base"
+# )
 
-print(response.data[0].embedding)
+# print(response.data[0].embedding)
 
 
 # documents = [

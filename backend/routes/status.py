@@ -1,12 +1,17 @@
-from fastapi import APIRouter, Request
-import httpx
 import asyncio
+import logging
+
+import httpx
+from fastapi import APIRouter, Request
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
 @router.get("/status/all")
 async def get_all_model_status(request: Request):
     config = request.app.state.config
+    http_client = request.app.state.http_client
     starting_models = getattr(request.app.state, "starting_models", set())
     llm_engines = config.get("LLM_engines", {})
     embedding = config.get("embedding_server", None)
@@ -18,19 +23,22 @@ async def get_all_model_status(request: Request):
         if name in starting_models:
             return {"name": name, "status": "啟動中", "port": port}
         try:
-            async with httpx.AsyncClient(timeout=2.0) as client:
-                resp = await client.get(url)
-                if resp.status_code == 200:
-                    return {"name": name, "status": "已啟動", "port": port}
+            resp = await http_client.get(url)
+            if resp.status_code == 200:
+                return {"name": name, "status": "已啟動", "port": port}
         except Exception:
-            print(f"無法連接模型 {name} : {url}")
+            logger.error(f"無法連接模型 {name} : {url}")
         return {"name": name, "status": "未啟動", "port": port}
-
+          
     for name, cfg in llm_engines.items():
-        host = cfg.get("host", "localhost")
-        port = cfg.get("port")
-        if port:
-            tasks.append(check_status(name, host, port))
+        instances = cfg.get("instances", [])
+        for instance in instances:
+            instance_id = instance.get("id")
+            if instance_id:
+                host = instance.get("host", cfg.get("host", "localhost"))
+                port = instance.get("port", cfg.get("port"))
+                if port:
+                    tasks.append(check_status(f"{name}::{instance_id}", host, port))
 
     if embedding:
         host = embedding.get("host", "localhost")
