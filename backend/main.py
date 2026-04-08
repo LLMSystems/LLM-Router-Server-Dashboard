@@ -1,4 +1,5 @@
 import asyncio
+from asyncio import subprocess
 import logging
 import os
 import httpx
@@ -56,10 +57,23 @@ async def lifespan(app: FastAPI):
     
     logger.info(f"{CONFIG_PATH} 載入完成")
     logger.info("GPU 進程監控任務已啟動")
+
+    app.state.running_llm_procs = {}
     
     try:
         yield  
     finally:
+        if hasattr(app.state, 'running_llm_procs'):
+            for key, proc in app.state.running_llm_procs.items():
+                if proc and proc.poll() is None:
+                    logger.info(f"正在關閉模型 {key}...")
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=5)
+                        logger.info(f"模型 {key} 已成功關閉")
+                    except subprocess.TimeoutExpired:
+                        logger.warning(f"模型 {key} 關閉逾時，強制終止")
+                        proc.kill()
         gpu_task.cancel()
         try:
             await gpu_task

@@ -10,8 +10,6 @@ import yaml
 
 logger = logging.getLogger(__name__)
 
-running_llm_procs: Dict[str, subprocess.Popen] = {}
-
 def wait_for_model_ready(log_path: str, timeout: int = 300, model_name: str = "") -> bool:
     start_time = time.time()
     while time.time() - start_time < timeout:
@@ -63,7 +61,7 @@ def launch_single_llm_model(app, model_name: str, config_path: str):
     seperate model group name and instance id by "::", if no instance id, just use model group name as key in running_llm_procs. This allows us to support both single-instance models and multi-instance models with the same code.
     """
     
-    global running_llm_procs
+    running_llm_procs = app.state.running_llm_procs
     if model_name in running_llm_procs and running_llm_procs[model_name].poll() is None:
         logger.info(f"模型 {model_name} 已經在執行中，跳過啟動。")
         raise RuntimeError(f"模型 {model_name} 已在執行中，請勿重複啟動。")
@@ -160,7 +158,7 @@ def launch_single_llm_model(app, model_name: str, config_path: str):
     
     
 def stop_single_llm_model(app, model_name: str):
-    global running_llm_procs
+    running_llm_procs = app.state.running_llm_procs
     
     model_tag = model_name.split("::")[0]
     model_id = model_name.split("::")[1] if "::" in model_name else None

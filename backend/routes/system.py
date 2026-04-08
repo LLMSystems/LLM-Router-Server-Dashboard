@@ -116,5 +116,3 @@ def get_gpu_processes(request: Request):
             return get_gpu_processes_with_info()
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Failed to get GPU processes: {str(e)}")
-
-
