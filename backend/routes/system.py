@@ -6,7 +6,7 @@ import os
 import subprocess
 
 import psutil
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
 logger = logging.getLogger(__name__)
 
@@ -107,16 +107,14 @@ def get_system_resources():
     }
 
 @router.get("/gpu/processes")
-def get_gpu_processes():
-    json_path = "/app/gpu_status.json"
-    if not os.path.exists(json_path):
-        raise HTTPException(status_code=404, detail="GPU status file not found")
-    
-    try:
-        with open(json_path, "r") as f:
-            data = json.load(f)
-        return data
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to read GPU status: {str(e)}")
+def get_gpu_processes(request: Request):
+    """從內存中獲取 GPU 進程信息（由後台任務定期更新）"""
+    if hasattr(request.app.state, 'gpu_processes'):
+        return request.app.state.gpu_processes
+    else:
+        try:
+            return get_gpu_processes_with_info()
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to get GPU processes: {str(e)}")
 
 

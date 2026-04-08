@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import httpx
@@ -19,6 +20,22 @@ def setup_logging() -> None:
 setup_logging()
 logger = logging.getLogger(__name__)
 
+async def update_gpu_processes_task(app: FastAPI):
+    """後台任務：定期更新 GPU 進程信息"""
+    while True:
+        try:
+            loop = asyncio.get_event_loop()
+            processes = await loop.run_in_executor(
+                None, system.get_gpu_processes_with_info
+            )
+            app.state.gpu_processes = processes
+            logger.debug(f"Updated GPU processes: {len(processes)} processes")
+        except Exception as e:
+            logger.error(f"Error updating GPU processes: {e}")
+            app.state.gpu_processes = []
+        
+        await asyncio.sleep(5)
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     with open(CONFIG_PATH, "r", encoding="utf-8") as f:
@@ -32,12 +49,25 @@ async def lifespan(app: FastAPI):
             max_keepalive_connections=20,
         ),
     )
-    logger.info(f"{CONFIG_PATH} 載入完成")    
+    
+    app.state.gpu_processes = []
+    
+    gpu_task = asyncio.create_task(update_gpu_processes_task(app))
+    
+    logger.info(f"{CONFIG_PATH} 載入完成")
+    logger.info("GPU 進程監控任務已啟動")
+    
     try:
         yield  
     finally:
+        gpu_task.cancel()
+        try:
+            await gpu_task
+        except asyncio.CancelledError:
+            pass
+        
         await app.state.http_client.aclose()
-    logger.info("FastAPI app 正在關閉")
+        logger.info("FastAPI app 正在關閉")
 
 app = FastAPI(lifespan=lifespan)
 
