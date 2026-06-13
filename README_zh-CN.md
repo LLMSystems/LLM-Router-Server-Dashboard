@@ -25,24 +25,31 @@
 
 ## 功能特色
 
-### 核心功能
+### 模型管理
+- 基於 vLLM 的多模型、多實例管理（LLM、Embedding、Reranker）
+- 每個實例獨立的生命週期（啟動/停止），具即時狀態機（`stopped → starting → ready → failed/stopping`），由 reconciler 從「進程存活 + `/health` 探測」推導真實狀態
+- **在前端貼上 `vllm serve …` 指令即可新增模型** — 解析成可編輯表單，以動態 *overlay* 疊加，**不動手寫的 `config.yaml`**；router 會熱重載（`POST /reload`），新模型端到端可被路由
+- 負載感知路由：router 自動選擇負載最低的實例（依運行中／等待中請求 + KV 快取使用率加權）
 
-- **多模型管理**
-  - 支援同時管理多個 LLM 模型（基於 vLLM）
-  - 支援 Embedding 模型和 Reranking 模型
-  - 獨立的模型生命週期管理（啟動/停止）
-  - 基於即時指標自動選擇負載最低的實例（運行中請求數、等待中請求數、KV 快取使用率）
+### 可靠性
+- **VRAM 預檢防呆** — 啟動前估算顯存，可能 OOM 就擋下，並提供一鍵 *Force start* 覆寫
+- **GPU 自動擺放** — 未指定 `cuda_device` 的實例會自動擺到剩餘顯存最多的 GPU
+- **失敗自動重啟** — managed 模型崩潰後以指數退避自動重啟（可設次數，恢復健康後重置）
 
-- **視覺化控制台**
-  - 實時顯示模型運行狀態
-  - GPU 資源監控
-  - 系統資源使用率統計
-  - 模型配置查看與編輯
+### 觀測性
+- 透過 Server-Sent Events 即時更新狀態（免輪詢）
+- **系統拓撲圖**（Vue Flow）— Clients → Router → 模型群組／Embedding → GPU 的即時 mission-control 圖，含流動的流量邊、GPU 擺放邊與控制平面；節點可點擊下鑽
+- **Router 負載平衡視圖** — 動畫扇形圖呈現每個副本的實際流量佔比，以及 router 下一個會選的實例
+- **趨勢圖** — 請求數／錯誤率／p95 延遲／tokens 的時序圖（15m–24h），由持久化的 request log 聚合
+- 每模型用量（次數、錯誤率、p50/p95 延遲、tokens）、請求日誌、狀態轉移事件時間軸
+- GPU／CPU／記憶體監控，以及 GPU 進程清單
 
-- **資源管理**
-  - GPU 設備分配與管理
-  - 記憶體使用率監控
-  - 多卡並行支援（Tensor Parallel）
+### Playground
+- OpenAI 相容的 **chat（串流）**、completions、**embeddings**、**reranking**，直接經由 router
+
+### 使用體驗
+- 明暗雙主題、資訊密集的「控制室」介面
+- 控制操作（啟動／停止／新增／移除）有密碼閘
 
 ---
 
@@ -56,50 +63,33 @@
 
 ## 快速開始
 
-### 前端部署
+### 前端（Web 控制台）
 
-#### 1. 使用 Docker 建立前端容器
+控制台位於 **`apps/frontend_llmops`** — Vue 3 + Vite + TypeScript、Tailwind CSS v4、shadcn-vue 元件、[Vue Flow](https://vueflow.dev)（拓撲／路由圖）、Pinia + Vue Router。（舊的 `apps/frontend` 已棄用。）
 
-```bash
-# 所有容器集中於 deploy/（build context 為 repo 根目錄）
-docker compose -f deploy/docker-compose.yaml up -d frontend
-```
-
-#### 2. 本地開發模式
+#### 本地開發
 
 ```bash
-cd apps/frontend
+cd apps/frontend_llmops
 npm install
-npm run dev
+npm run dev          # http://localhost:5173
 ```
 
-#### 3. 生產環境建置
+#### 生產環境建置
 
 ```bash
-cd apps/frontend
-npm install
-npm run build
+npm run build        # 輸出到 dist/
 ```
 
-#### 4. 配置前端 API 端點
+#### 設定 — `apps/frontend_llmops/.env`
 
-編輯 `apps/frontend/.env.local`：
 ```env
-VITE_API_BASE_URL=http://localhost:5000
-VITE_MODEL_CONTROL_PASSWORD=123
+VITE_API_BASE_URL=http://localhost:5000        # Dashboard 後端（生命週期、遙測）
+VITE_ROUTER_BASE_URL=http://localhost:8887     # LLM Router（推理 + /metrics + /reload）
+VITE_MODEL_CONTROL_PASSWORD=123                # 啟動／停止／新增／移除的密碼閘
 ```
 
-#### 5. 自訂服務器配置
-
-編輯 `apps/frontend/vite.config.js`：
-```javascript
-export default defineConfig({
-  server: {
-    host: '0.0.0.0',  // 允許外部訪問
-    port: 5111        // 自訂端口
-  }
-})
-```
+> **三個服務都要跑才完整**：Dashboard 後端（`:5000`）、LLM Router（`:8887`）、以及後端按需啟動的模型實例。後端與 router 都會在啟動時合併動態模型 overlay，所以從前端新增的模型在重啟後仍會保留。
 
 ### 後端部署
 
@@ -225,11 +215,8 @@ embedding_server:
 
 ---
 
-### Q4: 為什麼不能同時啟動多個模型？
+### Q4: 可以同時啟動多個模型嗎？
 
-**設計限制**：當前版本必須逐一啟動模型，以確保：
-- GPU 資源正確分配
-- 避免記憶體溢出
-- 進程管理穩定性
+可以 — 只要顯存放得下。**VRAM 預檢防呆**會擋下會撐爆目標 GPU 的啟動（可用 *Force start* 逐次覆寫），未指定 `cuda_device` 的實例會**自動擺放**到剩餘顯存最多的 GPU。單張小卡通常能跑一顆中型模型加幾顆小模型；模型是按需啟動的，所以可以設定一大批而不必全部同時運行。
 
-未來版本將優化並行啟動支援。
+可在後端用環境變數調整防呆／重啟策略：`LLMOPS_VRAM_GUARD`、`LLMOPS_AUTO_RESTART`、`LLMOPS_MAX_RESTARTS`、`LLMOPS_RESTART_BACKOFF`。

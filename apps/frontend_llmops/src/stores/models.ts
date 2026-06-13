@@ -133,11 +133,11 @@ export const useModelsStore = defineStore('models', () => {
     stopPolling()
   }
 
-  async function start(key: string) {
+  async function start(key: string, force = false) {
     pending.value.add(key)
     optimistic(key, 'starting')
     try {
-      const view = await api.startModel(key)
+      const view = await api.startModel(key, force)
       patch(view)
     } catch (e) {
       pending.value.delete(key)

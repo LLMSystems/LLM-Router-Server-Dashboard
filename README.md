@@ -27,24 +27,31 @@ This project combines a routing server (LLM-Router-Server) with an easy-to-use m
 
 ## Key Features
 
-### Core Functionality
+### Model Management
+- Multi-model, multi-instance management on vLLM (LLM, Embedding, Reranker)
+- Per-instance lifecycle (start/stop) with a live state machine (`stopped → starting → ready → failed/stopping`), driven by a reconciler that derives the true state from process liveness + `/health` probes
+- **Add models from the UI by pasting a `vllm serve …` command** — it is parsed into an editable form and layered on as a dynamic *overlay*, so the hand-maintained `config.yaml` stays untouched; the router hot-reloads (`POST /reload`) so new models are routable end-to-end
+- Load-aware routing: the router auto-selects the least-loaded instance (weighting running / waiting requests + KV-cache usage)
 
-- **Multi-Model Management**
-  - Support for managing multiple LLM models simultaneously (based on vLLM)
-  - Support for Embedding and Reranking models
-  - Independent model lifecycle management (start/stop)
-  - Automatically selects the least-loaded instance based on real-time metrics (running requests, waiting requests, KV cache usage)
+### Reliability
+- **VRAM pre-flight guard** — blocks a start that would likely OOM, with a one-click *Force start* override
+- **GPU auto-placement** — an instance with no pinned `cuda_device` is placed on the GPU with the most free memory
+- **Auto-restart** — a managed model that crashes is restarted with exponential backoff (configurable budget, resets once healthy)
 
-- **Visual Control Panel**
-  - Real-time display of model running status
-  - GPU resource monitoring
-  - System resource usage statistics
-  - Model configuration viewing and editing
+### Observability
+- Real-time status via Server-Sent Events (no polling)
+- **System topology** (Vue Flow) — a live mission-control graph of Clients → Router → model groups / Embedding → GPUs, with animated traffic edges, GPU-placement edges, and a control plane; nodes are clickable drill-ins
+- **Router load-balancing view** — an animated fan showing each replica's real traffic share and the instance the router will pick next
+- **Trends** — time-series charts (requests, error rate, p95 latency, tokens) over 15m–24h, aggregated from the persisted request log
+- Per-model usage (count, error rate, p50/p95 latency, tokens), request log, and a state-transition event timeline
+- GPU / CPU / memory monitoring plus a GPU-process inventory
 
-- **Resource Management**
-  - GPU device allocation and management
-  - Memory usage monitoring
-  - Multi-GPU parallel support (Tensor Parallel)
+### Playground
+- OpenAI-compatible **chat (streaming)**, completions, **embeddings**, and **reranking**, sent straight through the router
+
+### UX
+- Light / dark theme, dense "control-room" interface
+- Password-gated control actions (start / stop / add / remove)
 
 ---
 
@@ -58,50 +65,33 @@ This project combines a routing server (LLM-Router-Server) with an easy-to-use m
 
 ## Quick Start
 
-### Frontend Deployment
+### Frontend (Web Dashboard)
 
-#### 1. Build Frontend Container with Docker
+The dashboard lives in **`apps/frontend_llmops`** — Vue 3 + Vite + TypeScript, Tailwind CSS v4, shadcn-vue components, [Vue Flow](https://vueflow.dev) for the topology/router graphs, Pinia + Vue Router. (The older `apps/frontend` is deprecated.)
 
-```bash
-# All containers are centralised under deploy/ (build context = repo root)
-docker compose -f deploy/docker-compose.yaml up -d frontend
-```
-
-#### 2. Local Development Mode
+#### Local development
 
 ```bash
-cd apps/frontend
+cd apps/frontend_llmops
 npm install
-npm run dev
+npm run dev          # http://localhost:5173
 ```
 
-#### 3. Production Build
+#### Production build
 
 ```bash
-cd apps/frontend
-npm install
-npm run build
+npm run build        # outputs to dist/
 ```
 
-#### 4. Configure Frontend API Endpoint
+#### Configuration — `apps/frontend_llmops/.env`
 
-Edit `apps/frontend/.env.local`:
 ```env
-VITE_API_BASE_URL=http://localhost:5000
-VITE_MODEL_CONTROL_PASSWORD=123
+VITE_API_BASE_URL=http://localhost:5000        # Dashboard backend (lifecycle, telemetry)
+VITE_ROUTER_BASE_URL=http://localhost:8887     # LLM Router (inference + /metrics + /reload)
+VITE_MODEL_CONTROL_PASSWORD=123                # gate for start / stop / add / remove
 ```
 
-#### 5. Customize Server Configuration
-
-Edit `apps/frontend/vite.config.js`:
-```javascript
-export default defineConfig({
-  server: {
-    host: '0.0.0.0',  // Allow external access
-    port: 5111        // Custom port
-  }
-})
-```
+> **Run all three services for full functionality**: the Dashboard Backend (`:5000`), the LLM Router (`:8887`), and the model instances the backend launches on demand. The backend and router both merge the dynamic-model overlay at startup, so models added from the UI survive restarts.
 
 ### Backend Deployment
 
@@ -227,11 +217,8 @@ embedding_server:
 
 ---
 
-### Q4: Why can't I start multiple models simultaneously?
+### Q4: Can I run multiple models at once?
 
-**Design Limitation**: The current version requires starting models one at a time to ensure:
-- Proper GPU resource allocation
-- Avoid memory overflow
-- Process management stability
+Yes — as long as they fit in GPU memory. A **VRAM pre-flight guard** blocks a start that would overflow the target GPU (override per-start with *Force start*), and instances without a pinned `cuda_device` are **auto-placed** on the GPU with the most free memory. On a single small GPU you'll typically run one mid-size model alongside a few small ones; models are started on demand, so a large fleet can be configured without all running at once.
 
-Future versions will optimize parallel startup support.
+Tune the guard / restart policy via env on the backend: `LLMOPS_VRAM_GUARD`, `LLMOPS_AUTO_RESTART`, `LLMOPS_MAX_RESTARTS`, `LLMOPS_RESTART_BACKOFF`.

@@ -34,6 +34,10 @@ class ModelConflict(RuntimeError):
     """A create/delete request clashes with existing state (key, port, ownership)."""
 
 
+class VRAMInsufficient(RuntimeError):
+    """The target GPU likely lacks free memory for this model (pre-flight guard)."""
+
+
 def build_registry(config, config_path: str, launchers: list[Launcher]) -> ModelRegistry:
     """Enumerate every instance every launcher defines, all STOPPED initially."""
     registry = ModelRegistry()
@@ -102,16 +106,63 @@ class ModelManager:
     async def get(self, key: str) -> ModelInstance:
         return self._require(key)
 
-    async def start(self, key: str) -> ModelInstance:
+    async def _vram_preflight(self, key: str, spec, *, guard: bool) -> None:
+        """Auto-place an unpinned LLM on the freest GPU, and (if `guard`) block a
+        start that would almost certainly OOM. Skipped for tensor-parallel (>1)
+        launches, where placement spans GPUs."""
+        from app.services.gpu_service import get_gpu_info
+
+        group = key.split("::")[0]
+        engine = self.config.LLM_engines.get(group)
+        tp = getattr(engine.settings, "tensor_parallel_size", 1) if engine else 1
+        if tp and tp > 1:
+            return
+
+        loop = asyncio.get_event_loop()
+        gpus = await loop.run_in_executor(None, get_gpu_info)
+        if not gpus:
+            return  # no nvidia-smi / no GPUs visible -> can't assess
+        by_idx = {g["index"]: g for g in gpus}
+
+        cuda = spec.env.get("CUDA_VISIBLE_DEVICES")
+        cuda_idx = int(cuda) if cuda and cuda.isdigit() else None
+        if cuda_idx is None:
+            freest = max(gpus, key=lambda g: g["memory_total"] - g["memory_used"])
+            cuda_idx = freest["index"]
+            spec.env["CUDA_VISIBLE_DEVICES"] = str(cuda_idx)
+            logger.info("Auto-placed %s on GPU %d (most free VRAM)", key, cuda_idx)
+
+        if not guard or cuda_idx not in by_idx:
+            return
+        util = getattr(engine.settings, "gpu_memory_utilization", None) if engine else None
+        if not util:
+            return
+        g = by_idx[cuda_idx]
+        free = g["memory_total"] - g["memory_used"]
+        required = int(util * g["memory_total"])
+        if required > free:
+            freest = max(gpus, key=lambda x: x["memory_total"] - x["memory_used"])
+            raise VRAMInsufficient(
+                f"GPU {cuda_idx} has ~{free} MiB free but {key} needs ~{required} MiB "
+                f"(gpu_memory_utilization={util}). Freest GPU is {freest['index']} "
+                f"(~{freest['memory_total'] - freest['memory_used']} MiB free). "
+                f"Start with force=true to override."
+            )
+
+    async def start(self, key: str, force: bool = False, reset_restart: bool = True) -> ModelInstance:
         inst = self._require(key)
         launcher = self._launchers[inst.kind]
+
+        # Re-resolve the spec (config may have changed) outside the lock so the
+        # GPU pre-flight's nvidia-smi call never extends the critical section.
+        spec = launcher.build_spec(self.config, self.config_path, key)
+        if inst.kind == ModelKind.LLM:
+            await self._vram_preflight(key, spec, guard=(self.settings.vram_guard and not force))
 
         async with self.registry.lock:
             if inst.state in (ModelState.STARTING, ModelState.READY):
                 raise ModelAlreadyRunning(key)
             prev = inst.state
-            # Re-resolve the spec in case config changed since boot.
-            spec = launcher.build_spec(self.config, self.config_path, key)
             inst.spec = spec
             inst.log_path = spec.log_path
             inst.desired = Desired.RUNNING
@@ -119,6 +170,9 @@ class ModelManager:
             inst.started_at = time.time()
             inst.ready_at = None
             inst.last_error = None
+            if reset_restart:
+                inst.restart_count = 0
+            inst.next_restart_at = None
             inst.set_state(ModelState.STARTING)
         await self._record(inst, prev, ModelState.STARTING)
 

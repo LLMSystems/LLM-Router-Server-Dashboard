@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { Box, ChevronDown, Loader2, Play, Sparkles, Square } from '@lucide/vue'
+import { Box, ChevronDown, Loader2, Play, RotateCw, Sparkles, Square } from '@lucide/vue'
 import Card from '@/components/ui/Card.vue'
 import Badge from '@/components/ui/Badge.vue'
 import Button from '@/components/ui/Button.vue'
@@ -119,6 +119,11 @@ function isRunning(state: ModelState) {
           GPU {{ models.gpuForKey(m.key, m.kind) }}
         </Badge>
         <span class="font-mono text-[11px] text-muted-foreground">:{{ m.port }}</span>
+        <Tooltip v-if="m.restart_count" :text="`Auto-restarted ${m.restart_count}× after a crash`">
+          <span class="flex items-center gap-0.5 text-[10px] text-status-starting">
+            <RotateCw class="size-3" />{{ m.restart_count }}
+          </span>
+        </Tooltip>
 
         <div class="ml-auto flex items-center gap-2.5">
           <!-- Live load: shown only while serving -->

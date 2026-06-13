@@ -87,7 +87,7 @@ async def lifespan(app: FastAPI):
     await adopt_running(registry, http_client, settings, store)
 
     tasks = [
-        asyncio.create_task(reconcile_loop(registry, http_client, settings, store)),
+        asyncio.create_task(reconcile_loop(registry, http_client, settings, store, manager)),
         asyncio.create_task(_gpu_poll_loop(app, settings.gpu_poll_interval)),
     ]
     logger.info("Reconciler + GPU poller started")

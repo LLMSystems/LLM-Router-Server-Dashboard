@@ -12,7 +12,13 @@ from pydantic import BaseModel, ConfigDict
 
 from app.api.deps import get_manager
 from app.api.schemas import ModelView
-from app.llmops.manager import ModelAlreadyRunning, ModelConflict, ModelManager, ModelNotFound
+from app.llmops.manager import (
+    ModelAlreadyRunning,
+    ModelConflict,
+    ModelManager,
+    ModelNotFound,
+    VRAMInsufficient,
+)
 from app.services.vllm_command import parse_vllm_command
 
 router = APIRouter(prefix="/models", tags=["models"])
@@ -95,13 +101,15 @@ async def get_model(key: str, manager: ModelManager = Depends(get_manager)):
 
 
 @router.post("/{key}/start", response_model=ModelView, status_code=status.HTTP_202_ACCEPTED)
-async def start_model(key: str, manager: ModelManager = Depends(get_manager)):
+async def start_model(key: str, force: bool = False, manager: ModelManager = Depends(get_manager)):
     try:
-        return ModelView.from_instance(await manager.start(key))
+        return ModelView.from_instance(await manager.start(key, force=force))
     except ModelNotFound:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown model: {key}")
     except ModelAlreadyRunning:
         raise HTTPException(status.HTTP_409_CONFLICT, f"model already running: {key}")
+    except VRAMInsufficient as e:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(e))
 
 
 @router.post("/{key}/stop", response_model=ModelView, status_code=status.HTTP_202_ACCEPTED)

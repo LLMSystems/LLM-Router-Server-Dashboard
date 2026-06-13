@@ -61,6 +61,10 @@ class ModelInstance:
     ready_at: Optional[float] = None
     updated_at: float = field(default_factory=time.time)
 
+    # Auto-restart bookkeeping (managed by the reconciler).
+    restart_count: int = 0
+    next_restart_at: Optional[float] = None
+
     def touch(self) -> None:
         self.updated_at = time.time()
 

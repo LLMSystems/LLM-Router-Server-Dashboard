@@ -11,6 +11,7 @@ import type {
   ResourcesView,
   RouterMetrics,
   StateEvent,
+  TimeseriesPoint,
   UsageRow,
 } from '@/types/api'
 
@@ -68,8 +69,10 @@ export const api = {
   // ---- Dashboard Backend ----------------------------------------------------
   listModels: () => request<ModelView[]>(API_BASE, '/api/models'),
   getModel: (key: string) => request<ModelView>(API_BASE, `/api/models/${enc(key)}`),
-  startModel: (key: string) =>
-    request<ModelView>(API_BASE, `/api/models/${enc(key)}/start`, { method: 'POST' }),
+  startModel: (key: string, force = false) =>
+    request<ModelView>(API_BASE, `/api/models/${enc(key)}/start${force ? '?force=true' : ''}`, {
+      method: 'POST',
+    }),
   stopModel: (key: string) =>
     request<ModelView>(API_BASE, `/api/models/${enc(key)}/stop`, { method: 'POST' }),
   parseCommand: (command: string) =>
@@ -97,6 +100,13 @@ export const api = {
   },
   getLogs: (key: string, tail = 200) =>
     request<LogResponse>(API_BASE, `/api/models/${enc(key)}/logs?tail=${tail}`),
+  getTimeseries: (opts: { window?: number; bucket?: number; modelKey?: string } = {}) => {
+    const params = new URLSearchParams()
+    params.set('window', String(opts.window ?? 3600))
+    params.set('bucket', String(opts.bucket ?? 60))
+    if (opts.modelKey) params.set('model_key', opts.modelKey)
+    return request<TimeseriesPoint[]>(API_BASE, `/api/metrics/timeseries?${params.toString()}`)
+  },
   healthz: () => request<HealthZ>(API_BASE, '/healthz'),
 
   // ---- LLM Router -----------------------------------------------------------

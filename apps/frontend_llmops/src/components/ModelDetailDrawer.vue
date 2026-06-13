@@ -199,6 +199,12 @@ const eventColor: Record<string, string> = {
                 {{ model.ready_at ? formatDuration(model.ready_at) : '—' }}
               </p>
             </div>
+            <div class="rounded-lg border border-border/60 bg-background/40 p-3">
+              <p class="text-xs text-muted-foreground">Auto-restarts</p>
+              <p class="mt-0.5 text-sm tabular" :class="model.restart_count ? 'text-status-starting' : ''">
+                {{ model.restart_count ?? 0 }}
+              </p>
+            </div>
           </div>
 
           <!-- Full vLLM model_config -->

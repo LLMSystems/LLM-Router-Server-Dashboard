@@ -22,6 +22,12 @@ const router = createRouter({
       component: () => import('@/views/TrafficView.vue'),
     },
     {
+      path: '/trends',
+      name: 'trends',
+      meta: { title: 'Trends' },
+      component: () => import('@/views/TrendsView.vue'),
+    },
+    {
       path: '/playground',
       name: 'playground',
       meta: { title: 'Playground' },

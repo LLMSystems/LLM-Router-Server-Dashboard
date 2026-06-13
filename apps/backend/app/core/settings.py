@@ -18,6 +18,13 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    val = os.environ.get(name)
+    if val is None:
+        return default
+    return val.strip().lower() in ("1", "true", "yes", "on")
+
+
 @dataclass(frozen=True)
 class BackendSettings:
     # How often the reconciler derives observed state from process + health.
@@ -30,6 +37,14 @@ class BackendSettings:
     gpu_poll_interval: float = 5.0
     # SQLite telemetry DB path. None -> let LLMOpsStore use its shared default.
     db_path: Optional[str] = None
+    # Pre-flight VRAM check before starting a model (blocks likely-OOM starts).
+    vram_guard: bool = True
+    # Auto-restart a managed model that crashes while desired=running.
+    auto_restart: bool = True
+    # Max consecutive auto-restarts before giving up (budget resets once READY).
+    max_restarts: int = 3
+    # Exponential backoff base (seconds) between auto-restart attempts.
+    restart_backoff_base: float = 5.0
 
     @classmethod
     def from_env(cls) -> "BackendSettings":
@@ -39,4 +54,8 @@ class BackendSettings:
             stop_timeout=_env_float("LLMOPS_STOP_TIMEOUT", 10.0),
             gpu_poll_interval=_env_float("LLMOPS_GPU_POLL_INTERVAL", 5.0),
             db_path=os.environ.get("LLMOPS_DB_PATH"),
+            vram_guard=_env_bool("LLMOPS_VRAM_GUARD", True),
+            auto_restart=_env_bool("LLMOPS_AUTO_RESTART", True),
+            max_restarts=int(_env_float("LLMOPS_MAX_RESTARTS", 3)),
+            restart_backoff_base=_env_float("LLMOPS_RESTART_BACKOFF", 5.0),
         )

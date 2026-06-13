@@ -65,6 +65,17 @@ async def _reconcile_instance(
     # 1. Process death takes priority and is authoritative.
     exit_transition = _check_process_exit(inst)
     if exit_transition is not None:
+        _, _, to_state, _ = exit_transition
+        # Schedule an auto-restart for a crash (not a user-requested stop).
+        if (
+            to_state == ModelState.FAILED
+            and inst.desired == Desired.RUNNING
+            and inst.managed
+            and settings.auto_restart
+            and inst.restart_count < settings.max_restarts
+        ):
+            backoff = settings.restart_backoff_base * (2**inst.restart_count)
+            inst.next_restart_at = time.time() + backoff
         return [exit_transition]
     if inst.state not in _LIVE_STATES:
         return []
@@ -75,6 +86,8 @@ async def _reconcile_instance(
         if inst.state == ModelState.STARTING:
             if ready:
                 inst.last_error = None
+                inst.restart_count = 0  # healthy run -> fresh restart budget
+                inst.next_restart_at = None
                 inst.set_state(ModelState.READY)
                 return [(inst, ModelState.STARTING, ModelState.READY, None)]
             if inst.started_at and (time.time() - inst.started_at) > settings.start_timeout:
@@ -103,8 +116,35 @@ async def _persist(store, transitions: list[Transition]) -> None:
             logger.exception("Failed to record model event for %s", inst.key)
 
 
+async def _process_restarts(registry: ModelRegistry, settings: BackendSettings, store, manager) -> None:
+    """Start any crashed-but-wanted instances whose backoff has elapsed."""
+    now = time.time()
+    due: list[tuple[str, int]] = []
+    async with registry.lock:
+        for inst in registry.values():
+            if (
+                inst.state == ModelState.FAILED
+                and inst.desired == Desired.RUNNING
+                and inst.managed
+                and inst.next_restart_at is not None
+                and now >= inst.next_restart_at
+                and inst.restart_count < settings.max_restarts
+            ):
+                inst.next_restart_at = None
+                inst.restart_count += 1
+                due.append((inst.key, inst.restart_count))
+    for key, attempt in due:
+        logger.info("Auto-restarting %s (attempt %d/%d)", key, attempt, settings.max_restarts)
+        try:
+            # reset_restart=False preserves the climbing count so a perpetually
+            # crashing model eventually stops retrying.
+            await manager.start(key, reset_restart=False)
+        except Exception as e:
+            logger.warning("Auto-restart of %s failed: %s", key, e)
+
+
 async def reconcile_once(
-    registry: ModelRegistry, http_client, settings: BackendSettings, store=None
+    registry: ModelRegistry, http_client, settings: BackendSettings, store=None, manager=None
 ) -> None:
     """One reconciliation pass over every registered instance."""
     async with registry.lock:
@@ -114,6 +154,8 @@ async def reconcile_once(
         )
     transitions = [t for sub in results for t in sub]
     await _persist(store, transitions)
+    if manager is not None and settings.auto_restart:
+        await _process_restarts(registry, settings, store, manager)
 
 
 async def adopt_running(
@@ -138,12 +180,12 @@ async def adopt_running(
 
 
 async def reconcile_loop(
-    registry: ModelRegistry, http_client, settings: BackendSettings, store=None
+    registry: ModelRegistry, http_client, settings: BackendSettings, store=None, manager=None
 ) -> None:
     """Background task: reconcile forever at the configured interval."""
     while True:
         try:
-            await reconcile_once(registry, http_client, settings, store)
+            await reconcile_once(registry, http_client, settings, store, manager)
         except Exception:  # never let the loop die
             logger.exception("reconcile pass failed")
         await asyncio.sleep(settings.poll_interval)

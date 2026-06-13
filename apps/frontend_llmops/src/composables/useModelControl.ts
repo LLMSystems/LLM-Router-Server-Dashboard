@@ -20,17 +20,26 @@ const PASSWORD = import.meta.env.VITE_MODEL_CONTROL_PASSWORD ?? ''
 export function useModelControl() {
   const models = useModelsStore()
 
-  async function runOne(key: string, action: Action) {
+  async function runOne(key: string, action: Action, force = false) {
     const name = key.split('::')[0]
     try {
       if (action === 'start') {
-        await models.start(key)
+        await models.start(key, force)
         toast.success(`Starting ${name}`, { description: 'Waiting for /health to pass…' })
       } else {
         await models.stop(key)
         toast.info(`Stopping ${name}`, { description: 'Releasing GPU resources…' })
       }
     } catch (e) {
+      // A VRAM pre-flight block (409 mentioning force) gets a one-click override.
+      if (action === 'start' && e instanceof ApiError && e.status === 409 && /force=true/i.test(e.message)) {
+        toast.warning(`${name}: not enough VRAM`, {
+          description: e.message,
+          duration: 10000,
+          action: { label: 'Force start', onClick: () => void runOne(key, 'start', true) },
+        })
+        return
+      }
       const msg = e instanceof ApiError ? `${e.status}: ${e.message}` : String(e)
       toast.error(`Failed to ${action} ${name}`, { description: msg })
     }

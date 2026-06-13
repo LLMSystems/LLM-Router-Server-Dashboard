@@ -18,6 +18,16 @@ export interface ModelView {
   started_at: number | null
   ready_at: number | null
   updated_at: number | null
+  restart_count?: number
+}
+
+export interface TimeseriesPoint {
+  ts: number
+  count: number
+  error_count: number
+  avg_latency_ms: number | null
+  p95_latency_ms: number | null
+  total_tokens: number
 }
 
 export interface MemoryInfo {

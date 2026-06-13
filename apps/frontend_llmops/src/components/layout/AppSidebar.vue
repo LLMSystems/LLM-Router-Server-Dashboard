@@ -8,6 +8,7 @@ import {
   LayoutDashboard,
   Server,
   TerminalSquare,
+  TrendingUp,
 } from '@lucide/vue'
 import { useModelsStore } from '@/stores/models'
 import StatusDot from '@/components/StatusDot.vue'
@@ -44,6 +45,7 @@ const nav = [
   { to: '/', label: 'Overview', icon: LayoutDashboard },
   { to: '/models', label: 'Models', icon: Server },
   { to: '/traffic', label: 'Traffic', icon: ArrowLeftRight },
+  { to: '/trends', label: 'Trends', icon: TrendingUp },
   { to: '/playground', label: 'Playground', icon: TerminalSquare },
   { to: '/resources', label: 'Resources', icon: Cpu },
   { to: '/activity', label: 'Activity', icon: Activity },

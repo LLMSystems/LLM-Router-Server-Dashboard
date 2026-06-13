@@ -25,6 +25,7 @@ class ModelView(BaseModel):
     started_at: Optional[float] = None
     ready_at: Optional[float] = None
     updated_at: float
+    restart_count: int = 0
 
     @classmethod
     def from_instance(cls, inst: ModelInstance) -> "ModelView":
@@ -42,4 +43,5 @@ class ModelView(BaseModel):
             started_at=inst.started_at,
             ready_at=inst.ready_at,
             updated_at=inst.updated_at,
+            restart_count=inst.restart_count,
         )
