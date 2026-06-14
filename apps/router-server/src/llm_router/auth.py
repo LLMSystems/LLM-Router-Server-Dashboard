@@ -14,12 +14,31 @@ from __future__ import annotations
 import hashlib
 import os
 import time
+from collections import deque
 
 from fastapi import HTTPException, Request, status
 
 _CACHE_TTL = 30.0
-# hash -> (key_id_or_None, name, expires_at)
-_cache: dict[str, tuple[int | None, str, float]] = {}
+# hash -> (key_id_or_None, name, rpm_limit_or_None, expires_at)
+_cache: dict[str, tuple[int | None, str, int | None, float]] = {}
+# key name -> request timestamps in the trailing 60s (sliding-window limiter)
+_hits: dict[str, deque] = {}
+
+
+def _check_rate(name: str, rpm_limit: int | None) -> None:
+    if not rpm_limit:
+        return
+    now = time.monotonic()
+    dq = _hits.setdefault(name, deque())
+    while dq and dq[0] <= now - 60.0:
+        dq.popleft()
+    if len(dq) >= rpm_limit:
+        raise HTTPException(
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            f"rate limit exceeded for key '{name}' ({rpm_limit}/min)",
+            headers={"Retry-After": "60"},
+        )
+    dq.append(now)
 
 
 def _hash_key(plaintext: str) -> str:
@@ -52,7 +71,8 @@ async def authenticate(request: Request) -> str | None:
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    # The dashboard's own admin token is always accepted (attributed "dashboard").
+    # The dashboard's own admin token is always accepted (attributed "dashboard",
+    # never rate-limited).
     admin = os.environ.get("LLMOPS_ADMIN_TOKEN", "").strip()
     if admin and token == admin:
         return "dashboard"
@@ -60,7 +80,8 @@ async def authenticate(request: Request) -> str | None:
     key_hash = _hash_key(token)
     now = time.monotonic()
     cached = _cache.get(key_hash)
-    if cached and cached[2] > now:
+    if cached and cached[3] > now:
+        _check_rate(cached[1], cached[2])
         return cached[1]
 
     store = getattr(request.app.state, "store", None)
@@ -70,5 +91,6 @@ async def authenticate(request: Request) -> str | None:
             status.HTTP_401_UNAUTHORIZED, "invalid or revoked API key",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    _cache[key_hash] = (row["id"], row["name"], now + _CACHE_TTL)
+    _cache[key_hash] = (row["id"], row["name"], row.get("rpm_limit"), now + _CACHE_TTL)
+    _check_rate(row["name"], row.get("rpm_limit"))
     return row["name"]

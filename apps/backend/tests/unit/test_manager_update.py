@@ -136,3 +136,42 @@ async def test_edit_embedding_rejected_while_running(tmp_path):
     mgr.registry.get("embedding::default").state = ModelState.READY
     with pytest.raises(ModelConflict):
         await mgr.update_embedding_model("embedding", "m3e", {"max_length": 128})
+
+
+async def test_alert_webhook_fires_on_failed(tmp_path):
+    import asyncio
+
+    mgr, _ = _manager(tmp_path)
+    posts: list = []
+
+    class _Client:
+        async def post(self, url, json=None, timeout=None):
+            posts.append((url, json))
+
+    mgr.http_client = _Client()
+    mgr.settings = BackendSettings(alert_webhook="http://hook/alert")
+
+    inst = mgr.registry.get("Qwen3-0.6B::a")
+    await mgr._record(inst, ModelState.STARTING, ModelState.FAILED, "process exited (rc=1)")
+    await asyncio.sleep(0)  # let the fire-and-forget alert task run
+
+    assert posts and posts[0][0] == "http://hook/alert"
+    assert posts[0][1]["event"] == "model_failed"
+    assert posts[0][1]["model"] == "Qwen3-0.6B::a"
+
+
+async def test_no_alert_when_webhook_unset(tmp_path):
+    import asyncio
+
+    mgr, _ = _manager(tmp_path)
+    posts: list = []
+
+    class _Client:
+        async def post(self, url, json=None, timeout=None):
+            posts.append(url)
+
+    mgr.http_client = _Client()  # settings.alert_webhook is "" by default
+    inst = mgr.registry.get("Qwen3-0.6B::a")
+    await mgr._record(inst, ModelState.STARTING, ModelState.FAILED, "boom")
+    await asyncio.sleep(0)
+    assert posts == []

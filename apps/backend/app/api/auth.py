@@ -15,6 +15,7 @@ def _store(request: Request):
 
 class CreateKeyRequest(BaseModel):
     name: str = Field(min_length=1, max_length=64)
+    rpm_limit: int | None = Field(default=None, ge=1)  # requests/min; None = unlimited
 
 
 @router.get("/auth/status")
@@ -31,14 +32,24 @@ async def auth_verify():
 
 @router.get("/keys", dependencies=[Depends(require_admin)])
 async def list_keys(request: Request):
-    return await _store(request).list_api_keys()
+    store = _store(request)
+    keys = await store.list_api_keys()
+    usage = await store.api_key_usage()
+    for k in keys:
+        u = usage.get(k["name"], {})
+        k["request_count"] = u.get("request_count", 0)
+        k["total_tokens"] = u.get("total_tokens", 0)
+        k["usage_last_ts"] = u.get("last_ts")
+    return keys
 
 
 @router.post("/keys", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_admin)])
 async def create_key(body: CreateKeyRequest, request: Request):
     """Mint a key. The plaintext is returned **once** — it is never stored."""
     plaintext, key_hash, prefix = generate_api_key()
-    key_id = await _store(request).create_api_key(body.name.strip(), key_hash, prefix)
+    key_id = await _store(request).create_api_key(
+        body.name.strip(), key_hash, prefix, rpm_limit=body.rpm_limit
+    )
     return {"id": key_id, "name": body.name.strip(), "prefix": prefix, "key": plaintext}
 
 

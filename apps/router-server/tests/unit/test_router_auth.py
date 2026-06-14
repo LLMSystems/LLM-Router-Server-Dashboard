@@ -77,8 +77,10 @@ def _client(store):
 @pytest.fixture(autouse=True)
 def _reset_cache():
     auth_mod._cache.clear()
+    auth_mod._hits.clear()
     yield
     auth_mod._cache.clear()
+    auth_mod._hits.clear()
 
 
 def test_disabled_by_default_no_key_needed(monkeypatch):
@@ -117,6 +119,18 @@ def test_enabled_accepts_valid_api_key_and_attributes_name(monkeypatch):
     )
     assert r.status_code == 200
     assert store.reqs[-1]["api_key_name"] == "ci"
+
+
+def test_enabled_enforces_rpm_limit(monkeypatch):
+    monkeypatch.setenv("LLMOPS_REQUIRE_API_KEY", "true")
+    monkeypatch.delenv("LLMOPS_ADMIN_TOKEN", raising=False)
+    store = FakeStore(keys={_hash("sk-llmops-lim"): {"id": 9, "name": "ltd", "rpm_limit": 2}})
+    client = _client(store)
+    h = {"Authorization": "Bearer sk-llmops-lim"}
+    body = {"model": "Qwen3-0.6B"}
+    assert client.post("/v1/chat/completions", json=body, headers=h).status_code == 200
+    assert client.post("/v1/chat/completions", json=body, headers=h).status_code == 200
+    assert client.post("/v1/chat/completions", json=body, headers=h).status_code == 429  # over 2/min
 
 
 def test_enabled_rejects_unknown_key(monkeypatch):

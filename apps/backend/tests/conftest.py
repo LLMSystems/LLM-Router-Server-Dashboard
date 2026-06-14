@@ -116,16 +116,28 @@ class FakeStore:
         return [{"model_key": k, "count": c} for k, c in agg.items()]
 
     # -- API keys --
-    async def create_api_key(self, name, key_hash, prefix, ts=None):
+    async def create_api_key(self, name, key_hash, prefix, rpm_limit=None, ts=None):
         kid = len(self.api_keys) + 1
         self.api_keys.append({
             "id": kid, "name": name, "key_hash": key_hash, "prefix": prefix,
             "created_at": ts or 0.0, "last_used_at": None, "revoked": 0,
+            "rpm_limit": rpm_limit,
         })
         return kid
 
     async def list_api_keys(self):
         return [{k: v for k, v in r.items() if k != "key_hash"} for r in reversed(self.api_keys)]
+
+    async def api_key_usage(self):
+        agg: dict = {}
+        for r in self.reqs:
+            name = r.get("api_key_name")
+            if not name:
+                continue
+            a = agg.setdefault(name, {"name": name, "request_count": 0, "total_tokens": 0, "last_ts": 0})
+            a["request_count"] += 1
+            a["total_tokens"] += r.get("total_tokens") or 0
+        return agg
 
     async def get_active_api_key_by_hash(self, key_hash):
         for r in self.api_keys:

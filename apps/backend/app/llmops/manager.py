@@ -91,6 +91,8 @@ class ModelManager:
 
     async def _record(self, inst, from_state, to_state, detail=None) -> None:
         """Persist a state transition. Best-effort: telemetry never breaks ops."""
+        if to_state == ModelState.FAILED and getattr(self.settings, "alert_webhook", ""):
+            asyncio.create_task(self._fire_alert(inst, detail))
         if self.store is None:
             return
         try:
@@ -103,6 +105,22 @@ class ModelManager:
             )
         except Exception:
             logger.exception("Failed to record model event for %s", inst.key)
+
+    async def _fire_alert(self, inst, detail) -> None:
+        """POST a JSON alert to the configured webhook when a model fails.
+        Best-effort and fire-and-forget — never blocks or breaks the state machine."""
+        payload = {
+            "event": "model_failed",
+            "model": inst.key,
+            "kind": inst.kind.value,
+            "error": detail or inst.last_error,
+            "restart_count": inst.restart_count,
+            "ts": time.time(),
+        }
+        try:
+            await self.http_client.post(self.settings.alert_webhook, json=payload, timeout=5.0)
+        except Exception:
+            logger.warning("Alert webhook POST failed for %s", inst.key)
 
     async def list(self) -> list[ModelInstance]:
         return await self.registry.snapshot()

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { Bot, Loader2, Send, Trash2, User, X } from '@lucide/vue'
+import { Bot, Loader2, Send, Square, Trash2, User, X } from '@lucide/vue'
 import { api } from '@/lib/api'
 import { useModelsStore } from '@/stores/models'
 import Card from '@/components/ui/Card.vue'
@@ -44,10 +44,18 @@ interface ChatMsg {
   role: 'user' | 'assistant'
   content: string
 }
+interface Usage {
+  completion_tokens?: number
+  total_tokens?: number
+}
 const messages = ref<ChatMsg[]>([])
 const chatInput = ref('')
+const systemPrompt = ref('')
 const busy = ref(false)
 const lastLatency = ref<number | null>(null)
+const lastUsage = ref<Usage | null>(null)
+// One controller per send (single or compare) so the Stop button aborts all.
+let abortController: AbortController | null = null
 
 // ---- Compare mode (one prompt → many models) ----
 interface CompareLane {
@@ -56,6 +64,8 @@ interface CompareLane {
   busy: boolean
   latency: number | null
   ttft: number | null // time-to-first-token
+  tps: number | null // generated tokens/sec
+  tokens: number | null
 }
 const compareMode = ref(false)
 const lanes = ref<CompareLane[]>([])
@@ -67,27 +77,38 @@ const anyBusy = computed(() =>
 function toggleLane(m: string) {
   const i = lanes.value.findIndex((l) => l.model === m)
   if (i >= 0) lanes.value.splice(i, 1)
-  else lanes.value.push({ model: m, messages: [], busy: false, latency: null, ttft: null })
+  else lanes.value.push({ model: m, messages: [], busy: false, latency: null, ttft: null, tps: null, tokens: null })
 }
 function isSelected(m: string) {
   return lanes.value.some((l) => l.model === m)
 }
 
+function tokensPerSec(usage: Usage | null, latencyMs: number): number | null {
+  if (!usage?.completion_tokens || latencyMs <= 0) return null
+  return usage.completion_tokens / (latencyMs / 1000)
+}
+
 /** Shared streaming core used by both single chat and each compare lane.
  *  `history` must already include the latest user message but NOT the empty
- *  assistant bubble that `assistant` points at. */
+ *  assistant bubble that `assistant` points at. Returns the OpenAI usage block
+ *  (token counts) when the backend reports it. */
 async function streamChatCompletion(
   modelId: string,
   history: ChatMsg[],
   assistant: ChatMsg,
-  onFirstToken?: () => void,
-) {
+  opts: { onFirstToken?: () => void; signal?: AbortSignal } = {},
+): Promise<Usage | null> {
+  const msgs: { role: string; content: string }[] = []
+  if (systemPrompt.value.trim()) msgs.push({ role: 'system', content: systemPrompt.value.trim() })
+  for (const m of history) msgs.push({ role: m.role, content: m.content })
+
   const res = await api.routerFetch('/v1/chat/completions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    signal: opts.signal,
     body: JSON.stringify({
       model: modelId,
-      messages: history.map((m) => ({ role: m.role, content: m.content })),
+      messages: msgs,
       max_tokens: maxTokens.value,
       temperature: temperature.value,
       stream: stream.value,
@@ -95,6 +116,7 @@ async function streamChatCompletion(
   })
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
 
+  let usage: Usage | null = null
   if (stream.value && res.body) {
     const reader = res.body.getReader()
     const decoder = new TextDecoder()
@@ -112,9 +134,10 @@ async function streamChatCompletion(
         if (payload === '[DONE]') continue
         try {
           const json = JSON.parse(payload)
+          if (json.usage) usage = json.usage // final chunk carries token counts
           const delta = json.choices?.[0]?.delta?.content ?? ''
           if (delta) {
-            onFirstToken?.()
+            opts.onFirstToken?.()
             assistant.content += delta
           }
         } catch {
@@ -124,9 +147,15 @@ async function streamChatCompletion(
     }
   } else {
     const json = await res.json()
-    onFirstToken?.()
+    opts.onFirstToken?.()
     assistant.content = json.choices?.[0]?.message?.content ?? '（空回應）'
+    usage = json.usage ?? null
   }
+  return usage
+}
+
+function isAbort(e: unknown): boolean {
+  return e instanceof DOMException && e.name === 'AbortError'
 }
 
 async function sendChat() {
@@ -139,12 +168,19 @@ async function sendChat() {
   // (not the raw object) — otherwise streamed deltas wouldn't render live.
   const assistant = messages.value[messages.value.length - 1]!
   busy.value = true
+  lastUsage.value = null
   const t0 = performance.now()
   try {
-    await streamChatCompletion(model.value, messages.value.slice(0, -1), assistant)
+    lastUsage.value = await streamChatCompletion(model.value, messages.value.slice(0, -1), assistant, {
+      signal: abortController?.signal,
+    })
   } catch (e) {
-    messages.value.pop() // drop empty assistant bubble
-    toast.error('對話請求失敗', { description: String(e) })
+    if (isAbort(e)) {
+      if (!assistant.content) messages.value.pop() // nothing streamed yet — drop bubble
+    } else {
+      messages.value.pop()
+      toast.error('對話請求失敗', { description: String(e) })
+    }
   } finally {
     lastLatency.value = performance.now() - t0
     busy.value = false
@@ -158,15 +194,26 @@ async function runLane(lane: CompareLane) {
   lane.busy = true
   lane.latency = null
   lane.ttft = null
+  lane.tps = null
+  lane.tokens = null
   const history = lane.messages.slice(0, -1)
   const t0 = performance.now()
   try {
-    await streamChatCompletion(lane.model, history, assistant, () => {
-      if (lane.ttft === null) lane.ttft = performance.now() - t0
+    const usage = await streamChatCompletion(lane.model, history, assistant, {
+      signal: abortController?.signal,
+      onFirstToken: () => {
+        if (lane.ttft === null) lane.ttft = performance.now() - t0
+      },
     })
+    lane.tokens = usage?.completion_tokens ?? null
+    lane.tps = tokensPerSec(usage, performance.now() - t0)
   } catch (e) {
-    lane.messages.pop() // drop empty assistant bubble
-    toast.error(`${lane.model} 請求失敗`, { description: String(e) })
+    if (isAbort(e)) {
+      if (!assistant.content) lane.messages.pop()
+    } else {
+      lane.messages.pop()
+      toast.error(`${lane.model} 請求失敗`, { description: String(e) })
+    }
   } finally {
     lane.latency = performance.now() - t0
     lane.busy = false
@@ -186,9 +233,16 @@ async function sendCompare() {
 }
 
 function send() {
+  abortController = new AbortController()
   if (compareMode.value) sendCompare()
   else sendChat()
 }
+
+function stop() {
+  abortController?.abort()
+}
+
+const lastTps = computed(() => tokensPerSec(lastUsage.value, lastLatency.value ?? 0))
 
 function clearChat() {
   messages.value = []
@@ -319,12 +373,17 @@ watch(
                   class="min-h-[44px] resize-none"
                   @keydown.enter.exact.prevent="send"
                 />
-                <Button :disabled="busy" class="h-11" @click="send">
-                  <Loader2 v-if="busy" class="size-4 animate-spin" /><Send v-else class="size-4" />
+                <Button v-if="busy" variant="outline" class="h-11" title="停止生成" @click="stop">
+                  <Square class="size-4" />
+                </Button>
+                <Button v-else class="h-11" @click="send">
+                  <Send class="size-4" />
                 </Button>
               </div>
               <div class="mt-2 flex items-center gap-3 text-xs text-muted-foreground">
                 <span v-if="lastLatency" class="tabular">⏱ {{ formatLatency(lastLatency) }}</span>
+                <span v-if="lastUsage?.completion_tokens" class="tabular">{{ lastUsage.completion_tokens }} tok</span>
+                <span v-if="lastTps" class="tabular">{{ lastTps.toFixed(1) }} tok/s</span>
                 <button v-if="messages.length" class="ml-auto flex items-center gap-1 hover:text-foreground" @click="clearChat">
                   <Trash2 class="size-3.5" />清除
                 </button>
@@ -354,6 +413,7 @@ watch(
                   <div class="ml-auto flex shrink-0 items-center gap-1.5">
                     <Badge v-if="lane.ttft != null" variant="muted" class="tabular">首字 {{ formatLatency(lane.ttft) }}</Badge>
                     <Badge v-if="lane.latency != null" variant="muted" class="tabular">⏱ {{ formatLatency(lane.latency) }}</Badge>
+                    <Badge v-if="lane.tps != null" variant="muted" class="tabular">{{ lane.tps.toFixed(1) }} tok/s</Badge>
                     <button class="text-muted-foreground hover:text-foreground" title="移除此模型" @click="toggleLane(lane.model)">
                       <X class="size-3.5" />
                     </button>
@@ -403,8 +463,11 @@ watch(
                   class="min-h-[44px] resize-none"
                   @keydown.enter.exact.prevent="send"
                 />
-                <Button :disabled="anyBusy || !lanes.length" class="h-11" @click="send">
-                  <Loader2 v-if="anyBusy" class="size-4 animate-spin" /><Send v-else class="size-4" />
+                <Button v-if="anyBusy" variant="outline" class="h-11" title="停止生成" @click="stop">
+                  <Square class="size-4" />
+                </Button>
+                <Button v-else :disabled="!lanes.length" class="h-11" @click="send">
+                  <Send class="size-4" />
                 </Button>
               </div>
               <div class="mt-2 flex items-center gap-3 text-xs text-muted-foreground">
@@ -427,6 +490,15 @@ watch(
               <label class="flex items-center justify-between">
                 <span class="text-xs text-muted-foreground">對比模式（多模型同問題）</span>
                 <input v-model="compareMode" type="checkbox" class="size-4 accent-[var(--chart-1)]" />
+              </label>
+
+              <label class="block">
+                <span class="text-xs text-muted-foreground">系統提示（System prompt）</span>
+                <Textarea
+                  v-model="systemPrompt"
+                  placeholder="留空則不送。例如：你是一位專業的繁體中文助理。"
+                  class="mt-1 min-h-[60px] resize-none text-xs"
+                />
               </label>
 
               <!-- Single: one model -->

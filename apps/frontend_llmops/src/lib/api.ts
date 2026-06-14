@@ -203,8 +203,11 @@ export const api = {
     }),
 
   listKeys: () => request<ApiKey[]>(API_BASE, '/api/keys'),
-  createKey: (name: string) =>
-    request<CreatedKey>(API_BASE, '/api/keys', { method: 'POST', body: JSON.stringify({ name }) }),
+  createKey: (name: string, rpmLimit?: number | null) =>
+    request<CreatedKey>(API_BASE, '/api/keys', {
+      method: 'POST',
+      body: JSON.stringify({ name, rpm_limit: rpmLimit ?? null }),
+    }),
   revokeKey: (id: number) => request<null>(API_BASE, `/api/keys/${id}`, { method: 'DELETE' }),
 
   /** Best-effort: ask the Router to re-read config + overlay so newly-added

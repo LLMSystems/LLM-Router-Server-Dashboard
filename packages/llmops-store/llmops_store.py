@@ -67,7 +67,8 @@ CREATE TABLE IF NOT EXISTS api_keys (
     prefix       TEXT    NOT NULL,
     created_at   REAL    NOT NULL,
     last_used_at REAL,
-    revoked      INTEGER NOT NULL DEFAULT 0
+    revoked      INTEGER NOT NULL DEFAULT 0,
+    rpm_limit    INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);
 """
@@ -76,6 +77,7 @@ CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);
 # created before they existed (CREATE TABLE IF NOT EXISTS won't add them).
 _MIGRATIONS = [
     ("request_logs", "api_key_name", "TEXT"),
+    ("api_keys", "rpm_limit", "INTEGER"),
 ]
 
 
@@ -176,13 +178,15 @@ class LLMOpsStore:
     # ---- API keys ---------------------------------------------------------
 
     async def create_api_key(
-        self, name: str, key_hash: str, prefix: str, ts: Optional[float] = None
+        self, name: str, key_hash: str, prefix: str,
+        rpm_limit: Optional[int] = None, ts: Optional[float] = None,
     ) -> int:
         import time
 
         cur = await self._db.execute(
-            "INSERT INTO api_keys (name, key_hash, prefix, created_at) VALUES (?, ?, ?, ?)",
-            (name, key_hash, prefix, ts or time.time()),
+            "INSERT INTO api_keys (name, key_hash, prefix, created_at, rpm_limit) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (name, key_hash, prefix, ts or time.time(), rpm_limit),
         )
         await self._db.commit()
         return cur.lastrowid
@@ -190,7 +194,7 @@ class LLMOpsStore:
     async def list_api_keys(self) -> list[dict]:
         """All keys, newest first — never returns the hash."""
         cur = await self._db.execute(
-            "SELECT id, name, prefix, created_at, last_used_at, revoked "
+            "SELECT id, name, prefix, created_at, last_used_at, revoked, rpm_limit "
             "FROM api_keys ORDER BY id DESC"
         )
         return [dict(r) for r in await cur.fetchall()]
@@ -198,13 +202,22 @@ class LLMOpsStore:
     async def get_active_api_key_by_hash(self, key_hash: str) -> Optional[dict]:
         """Look up a non-revoked key by its hash (for request authentication)."""
         cur = await self._db.execute(
-            "SELECT id, name, prefix, revoked FROM api_keys WHERE key_hash = ?",
+            "SELECT id, name, prefix, revoked, rpm_limit FROM api_keys WHERE key_hash = ?",
             (key_hash,),
         )
         row = await cur.fetchone()
         if row is None or row["revoked"]:
             return None
         return dict(row)
+
+    async def api_key_usage(self) -> dict[str, dict]:
+        """Per-key request aggregates keyed by key name (from request_logs)."""
+        cur = await self._db.execute(
+            "SELECT api_key_name AS name, COUNT(*) AS request_count, "
+            "COALESCE(SUM(total_tokens), 0) AS total_tokens, MAX(ts) AS last_ts "
+            "FROM request_logs WHERE api_key_name IS NOT NULL GROUP BY api_key_name"
+        )
+        return {r["name"]: dict(r) for r in await cur.fetchall()}
 
     async def revoke_api_key(self, key_id: int) -> bool:
         cur = await self._db.execute(

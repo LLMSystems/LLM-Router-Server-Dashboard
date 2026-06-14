@@ -334,7 +334,9 @@ async def proxy_completion(request: Request):
 
 @router.post("/v1/embeddings")
 async def proxy_embeddings(request: Request):
-    await authenticate(request)
+    key_name = await authenticate(request)
+    started = time.perf_counter()
+    model_key = None
     try:
         config = request.app.state.config
         embedding_cfg = config.get("embedding_server", {})
@@ -343,10 +345,14 @@ async def proxy_embeddings(request: Request):
         target_url = f"http://{host}:{port}/v1/embeddings"
 
         body = await request.body()
+        try:
+            model_key = (json.loads(body) or {}).get("model")
+        except Exception:
+            model_key = None
         headers = dict(request.headers)
         headers.pop("host", None)
         headers.pop("content-length", None)
-        
+
         client = request.app.state.http_client
         # The shared client has read=None (for long LLM generations); embeddings
         # are fast, so give this path a real bound instead.
@@ -363,9 +369,20 @@ async def proxy_embeddings(request: Request):
             content=resp.content,
             status_code=resp.status_code,
             media_type=resp.headers.get("content-type", "application/json"),
+            # Log after responding (off the client's path) — attributes the
+            # request to its API key and captures token usage like the LLM path.
+            background=BackgroundTask(
+                _record_request, request.app, model_key, None, "/v1/embeddings",
+                resp.status_code, started, _usage_from_body(resp.content),
+                None, key_name,
+            ),
         )
 
     except httpx.RequestError as e:
+        await _record_request(
+            request.app, model_key, None, "/v1/embeddings", 503, started,
+            error=str(e), api_key_name=key_name,
+        )
         raise HTTPException(
             status_code=503, detail=f"Cannot connect to embedding server: {str(e)}"
         )

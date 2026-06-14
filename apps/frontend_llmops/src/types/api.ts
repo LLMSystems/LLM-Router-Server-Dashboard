@@ -169,6 +169,10 @@ export interface ApiKey {
   created_at: number
   last_used_at: number | null
   revoked: number
+  rpm_limit: number | null
+  request_count: number
+  total_tokens: number
+  usage_last_ts: number | null
 }
 
 /** Returned once on creation — `key` is the plaintext, shown only here. */

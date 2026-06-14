@@ -4,7 +4,7 @@ import { Copy, KeyRound, Loader2, Lock, Plus, Trash2 } from '@lucide/vue'
 import { api, ApiError } from '@/lib/api'
 import { useAuth } from '@/composables/useAuth'
 import { toast } from '@/lib/toast'
-import { formatTime } from '@/lib/utils'
+import { formatNumber, formatTime } from '@/lib/utils'
 import type { ApiKey, CreatedKey } from '@/types/api'
 import Card from '@/components/ui/Card.vue'
 import Button from '@/components/ui/Button.vue'
@@ -18,6 +18,7 @@ const keys = ref<ApiKey[]>([])
 const loading = ref(false)
 const locked = ref(false)
 const newName = ref('')
+const newRpm = ref<number | undefined>(undefined)
 const creating = ref(false)
 
 // One-time plaintext reveal after creation.
@@ -47,9 +48,10 @@ async function create() {
   if (!(await ensureUnlocked())) return
   creating.value = true
   try {
-    reveal.value = await api.createKey(name)
+    reveal.value = await api.createKey(name, newRpm.value && newRpm.value > 0 ? newRpm.value : null)
     revealOpen.value = true
     newName.value = ''
+    newRpm.value = undefined
     await load()
   } catch (e) {
     toast.error('建立金鑰失敗', { description: e instanceof ApiError ? `${e.status}: ${e.message}` : String(e) })
@@ -121,6 +123,10 @@ onMounted(async () => {
             <span class="text-xs text-muted-foreground">名稱（用於用量歸屬）</span>
             <Input v-model="newName" placeholder="例如：team-rag、ci-bot" class="mt-1" @keydown.enter="create" />
           </label>
+          <label class="w-32">
+            <span class="text-xs text-muted-foreground">速率上限（次/分）</span>
+            <Input v-model.number="newRpm" type="number" min="1" placeholder="不限" class="mt-1" @keydown.enter="create" />
+          </label>
           <Button :disabled="!newName.trim() || creating" @click="create">
             <Loader2 v-if="creating" class="size-4 animate-spin" /><Plus v-else class="size-4" />建立
           </Button>
@@ -139,12 +145,18 @@ onMounted(async () => {
               <div class="flex items-center gap-2">
                 <span class="truncate text-sm font-medium">{{ k.name }}</span>
                 <Badge v-if="k.revoked" variant="muted">已撤銷</Badge>
+                <Badge v-if="k.rpm_limit" variant="muted" class="tabular">{{ k.rpm_limit }}/分</Badge>
               </div>
               <span class="font-mono text-xs text-muted-foreground">{{ k.prefix }}</span>
             </div>
-            <div class="hidden text-right text-xs text-muted-foreground sm:block">
-              <p>建立：{{ formatTime(k.created_at) }}</p>
-              <p>最後使用：{{ k.last_used_at ? formatTime(k.last_used_at) : '—' }}</p>
+            <div class="hidden text-right text-xs sm:block">
+              <p class="tabular">
+                <span class="font-medium text-foreground">{{ formatNumber(k.request_count) }}</span>
+                <span class="text-muted-foreground"> 次 · {{ formatNumber(k.total_tokens, true) }} tokens</span>
+              </p>
+              <p class="text-muted-foreground">
+                最後使用：{{ k.usage_last_ts ? formatTime(k.usage_last_ts) : '—' }}
+              </p>
             </div>
             <Button
               v-if="!k.revoked"

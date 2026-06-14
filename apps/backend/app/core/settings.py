@@ -48,6 +48,8 @@ class BackendSettings:
     # Shared admin token gating control/write operations + API-key management.
     # Empty -> auth disabled (dev mode): writes are open and a warning is logged.
     admin_token: str = ""
+    # Optional webhook URL; a JSON alert is POSTed when a model enters FAILED.
+    alert_webhook: str = ""
 
     @property
     def auth_enabled(self) -> bool:
@@ -57,6 +59,7 @@ class BackendSettings:
     def from_env(cls) -> "BackendSettings":
         return cls(
             admin_token=os.environ.get("LLMOPS_ADMIN_TOKEN", "").strip(),
+            alert_webhook=os.environ.get("LLMOPS_ALERT_WEBHOOK", "").strip(),
             poll_interval=_env_float("LLMOPS_POLL_INTERVAL", 2.0),
             start_timeout=_env_float("LLMOPS_START_TIMEOUT", 300.0),
             stop_timeout=_env_float("LLMOPS_STOP_TIMEOUT", 10.0),
