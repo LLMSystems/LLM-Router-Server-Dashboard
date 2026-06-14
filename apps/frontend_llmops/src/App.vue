@@ -10,6 +10,7 @@ import { useModelsStore } from '@/stores/models'
 import { useResourcesStore } from '@/stores/resources'
 import { useTrafficStore } from '@/stores/traffic'
 import { useTheme } from '@/composables/useTheme'
+import { useAuth } from '@/composables/useAuth'
 
 // Initialise theme (reads persisted preference / system default).
 const { isDark } = useTheme()
@@ -17,11 +18,13 @@ const { isDark } = useTheme()
 const models = useModelsStore()
 const resources = useResourcesStore()
 const traffic = useTrafficStore()
+const { refreshStatus } = useAuth()
 
 onMounted(() => {
   models.connect()
   resources.start()
   traffic.start()
+  void refreshStatus() // learn whether the backend requires an admin token
 })
 onBeforeUnmount(() => {
   models.disconnect()

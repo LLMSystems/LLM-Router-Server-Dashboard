@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict
 
 from app.api.deps import get_manager
 from app.api.schemas import ModelView
+from app.core.auth import require_admin
 from app.llmops.manager import (
     ModelAlreadyRunning,
     ModelConflict,
@@ -48,7 +49,7 @@ async def list_models(manager: ModelManager = Depends(get_manager)):
     return [ModelView.from_instance(i) for i in await manager.list()]
 
 
-@router.post("/parse")
+@router.post("/parse", dependencies=[Depends(require_admin)])
 async def parse_command(body: ParseRequest, manager: ModelManager = Depends(get_manager)):
     """Parse a pasted vLLM command into editable fields + conflict hints."""
     try:
@@ -64,7 +65,8 @@ async def parse_command(body: ParseRequest, manager: ModelManager = Depends(get_
     return parsed
 
 
-@router.post("", response_model=ModelView, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=ModelView, status_code=status.HTTP_201_CREATED,
+             dependencies=[Depends(require_admin)])
 async def create_model(body: CreateModelRequest, manager: ModelManager = Depends(get_manager)):
     """Add a dynamic LLM model (overlay). Appears immediately as STOPPED."""
     settings = dict(body.settings)
@@ -81,7 +83,7 @@ async def create_model(body: CreateModelRequest, manager: ModelManager = Depends
     return ModelView.from_instance(inst)
 
 
-@router.put("/{key}", response_model=ModelView)
+@router.put("/{key}", response_model=ModelView, dependencies=[Depends(require_admin)])
 async def update_model(
     key: str, body: CreateModelRequest, manager: ModelManager = Depends(get_manager)
 ):
@@ -102,7 +104,8 @@ async def update_model(
     return ModelView.from_instance(inst)
 
 
-@router.delete("/{key}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{key}", status_code=status.HTTP_204_NO_CONTENT,
+               dependencies=[Depends(require_admin)])
 async def delete_model(key: str, manager: ModelManager = Depends(get_manager)):
     """Remove a dynamically-added model (must be overlay-owned and stopped)."""
     try:
@@ -121,7 +124,8 @@ async def get_model(key: str, manager: ModelManager = Depends(get_manager)):
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown model: {key}")
 
 
-@router.post("/{key}/start", response_model=ModelView, status_code=status.HTTP_202_ACCEPTED)
+@router.post("/{key}/start", response_model=ModelView, status_code=status.HTTP_202_ACCEPTED,
+             dependencies=[Depends(require_admin)])
 async def start_model(key: str, force: bool = False, manager: ModelManager = Depends(get_manager)):
     try:
         return ModelView.from_instance(await manager.start(key, force=force))
@@ -133,7 +137,8 @@ async def start_model(key: str, force: bool = False, manager: ModelManager = Dep
         raise HTTPException(status.HTTP_409_CONFLICT, str(e))
 
 
-@router.post("/{key}/stop", response_model=ModelView, status_code=status.HTTP_202_ACCEPTED)
+@router.post("/{key}/stop", response_model=ModelView, status_code=status.HTTP_202_ACCEPTED,
+             dependencies=[Depends(require_admin)])
 async def stop_model(key: str, manager: ModelManager = Depends(get_manager)):
     try:
         return ModelView.from_instance(await manager.stop(key))

@@ -1,24 +1,19 @@
-import { computed, ref } from 'vue'
+import { computed } from 'vue'
 import { useModelsStore } from '@/stores/models'
 import { toast } from '@/lib/toast'
 import { ApiError } from '@/lib/api'
+import { useAuth } from '@/composables/useAuth'
 
 type Action = 'start' | 'stop'
 
-// Module-level so the gate is shared app-wide and the password is only typed once.
-const unlocked = ref(false)
-const dialogOpen = ref(false)
-const pending = ref<{ keys: string[]; action: Action } | null>(null)
-
-const PASSWORD = import.meta.env.VITE_MODEL_CONTROL_PASSWORD ?? ''
-
 /**
- * Password-gated start/stop, single or bulk. The first protected action opens a
- * confirm dialog; once the correct password is entered the gate stays unlocked
- * for the session. Mount <ModelControlDialog /> once (in App.vue) to render it.
+ * Admin-gated start/stop, single or bulk. Routed through the shared admin-token
+ * gate (useAuth): the first protected action prompts for the token when the
+ * backend requires one, then stays unlocked for the session.
  */
 export function useModelControl() {
   const models = useModelsStore()
+  const { ensureUnlocked } = useAuth()
 
   // Only one LLM may be in the `starting` phase at a time — loading two model
   // weights at once OOMs a single GPU. Multiple *ready* LLMs are fine, and
@@ -101,38 +96,19 @@ export function useModelControl() {
     void startSequential(keys)
   }
 
-  function requestMany(keys: string[], action: Action) {
+  async function requestMany(keys: string[], action: Action) {
     if (!keys.length) return
-    if (!PASSWORD || unlocked.value) {
-      execute(keys, action)
-      return
-    }
-    pending.value = { keys, action }
-    dialogOpen.value = true
+    if (!(await ensureUnlocked())) return
+    execute(keys, action)
   }
 
   function request(key: string, action: Action) {
-    requestMany([key], action)
-  }
-
-  function submitPassword(input: string): boolean {
-    if (input !== PASSWORD) return false
-    unlocked.value = true
-    dialogOpen.value = false
-    if (pending.value) {
-      execute(pending.value.keys, pending.value.action)
-      pending.value = null
-    }
-    return true
+    void requestMany([key], action)
   }
 
   return {
-    unlocked,
-    dialogOpen,
-    pending,
     request,
     requestMany,
-    submitPassword,
     isLlmStarting,
     isStartBlocked,
     startingLlmName,

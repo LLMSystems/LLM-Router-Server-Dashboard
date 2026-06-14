@@ -55,10 +55,28 @@ CREATE TABLE IF NOT EXISTS request_logs (
     prompt_tokens    INTEGER,
     completion_tokens INTEGER,
     total_tokens     INTEGER,
-    error            TEXT
+    error            TEXT,
+    api_key_name     TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_request_logs_model_ts ON request_logs(model_key, ts);
+
+CREATE TABLE IF NOT EXISTS api_keys (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    name         TEXT    NOT NULL,
+    key_hash     TEXT    NOT NULL UNIQUE,
+    prefix       TEXT    NOT NULL,
+    created_at   REAL    NOT NULL,
+    last_used_at REAL,
+    revoked      INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);
 """
+
+# Columns added after the original schema shipped; applied on init() for DBs
+# created before they existed (CREATE TABLE IF NOT EXISTS won't add them).
+_MIGRATIONS = [
+    ("request_logs", "api_key_name", "TEXT"),
+]
 
 
 def _percentile(values: list[float], pct: float) -> Optional[float]:
@@ -82,8 +100,17 @@ class LLMOpsStore:
         await self._db.execute("PRAGMA journal_mode=WAL")
         await self._db.execute("PRAGMA busy_timeout=5000")
         await self._db.executescript(_SCHEMA)
+        await self._migrate()
         await self._db.commit()
         return self
+
+    async def _migrate(self) -> None:
+        """Add columns introduced after the original schema, idempotently."""
+        for table, column, decl in _MIGRATIONS:
+            cur = await self._db.execute(f"PRAGMA table_info({table})")
+            cols = {row["name"] for row in await cur.fetchall()}
+            if column not in cols:
+                await self._db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
 
     async def close(self) -> None:
         if self._db is not None:
@@ -121,14 +148,15 @@ class LLMOpsStore:
         completion_tokens: Optional[int] = None,
         total_tokens: Optional[int] = None,
         error: Optional[str] = None,
+        api_key_name: Optional[str] = None,
         ts: Optional[float] = None,
     ) -> None:
         import time
 
         await self._db.execute(
             "INSERT INTO request_logs (ts, model_key, instance_id, path, status_code, "
-            "latency_ms, prompt_tokens, completion_tokens, total_tokens, error) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "latency_ms, prompt_tokens, completion_tokens, total_tokens, error, api_key_name) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 ts or time.time(),
                 model_key,
@@ -140,9 +168,62 @@ class LLMOpsStore:
                 completion_tokens,
                 total_tokens,
                 error,
+                api_key_name,
             ),
         )
         await self._db.commit()
+
+    # ---- API keys ---------------------------------------------------------
+
+    async def create_api_key(
+        self, name: str, key_hash: str, prefix: str, ts: Optional[float] = None
+    ) -> int:
+        import time
+
+        cur = await self._db.execute(
+            "INSERT INTO api_keys (name, key_hash, prefix, created_at) VALUES (?, ?, ?, ?)",
+            (name, key_hash, prefix, ts or time.time()),
+        )
+        await self._db.commit()
+        return cur.lastrowid
+
+    async def list_api_keys(self) -> list[dict]:
+        """All keys, newest first — never returns the hash."""
+        cur = await self._db.execute(
+            "SELECT id, name, prefix, created_at, last_used_at, revoked "
+            "FROM api_keys ORDER BY id DESC"
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
+    async def get_active_api_key_by_hash(self, key_hash: str) -> Optional[dict]:
+        """Look up a non-revoked key by its hash (for request authentication)."""
+        cur = await self._db.execute(
+            "SELECT id, name, prefix, revoked FROM api_keys WHERE key_hash = ?",
+            (key_hash,),
+        )
+        row = await cur.fetchone()
+        if row is None or row["revoked"]:
+            return None
+        return dict(row)
+
+    async def revoke_api_key(self, key_id: int) -> bool:
+        cur = await self._db.execute(
+            "UPDATE api_keys SET revoked = 1 WHERE id = ? AND revoked = 0", (key_id,)
+        )
+        await self._db.commit()
+        return cur.rowcount > 0
+
+    async def touch_api_key(self, key_id: int, ts: Optional[float] = None) -> None:
+        """Best-effort last-used timestamp (skipped silently on contention)."""
+        import time
+
+        try:
+            await self._db.execute(
+                "UPDATE api_keys SET last_used_at = ? WHERE id = ?", (ts or time.time(), key_id)
+            )
+            await self._db.commit()
+        except Exception:
+            pass
 
     # ---- reads ------------------------------------------------------------
 

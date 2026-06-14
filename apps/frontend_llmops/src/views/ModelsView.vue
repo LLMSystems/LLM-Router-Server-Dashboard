@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { Plus, RefreshCw, Search } from '@lucide/vue'
 import { useModelsStore } from '@/stores/models'
+import { useAuth } from '@/composables/useAuth'
 import ModelGroupCard from '@/components/ModelGroupCard.vue'
 import ModelDetailDrawer from '@/components/ModelDetailDrawer.vue'
 import AddModelDialog from '@/components/AddModelDialog.vue'
@@ -11,6 +12,7 @@ import Input from '@/components/ui/Input.vue'
 import type { ModelKind, ModelView } from '@/types/api'
 
 const models = useModelsStore()
+const { ensureUnlocked } = useAuth()
 const route = useRoute()
 
 // Seed the search from ?q= so drilling in from the topology lands pre-filtered.
@@ -28,7 +30,12 @@ function onCreated() {
   void models.loadConfig()
 }
 
-function openEdit(key: string) {
+async function openAdd() {
+  if (await ensureUnlocked()) addOpen.value = true
+}
+
+async function openEdit(key: string) {
+  if (!(await ensureUnlocked())) return
   editKey.value = key
   drawerOpen.value = false
   editOpen.value = true
@@ -95,7 +102,7 @@ const kinds: { value: 'all' | ModelKind; label: string }[] = [
         <Button variant="outline" size="sm" @click="models.refresh()">
           <RefreshCw class="size-3.5" />重新整理
         </Button>
-        <Button size="sm" @click="addOpen = true"><Plus class="size-4" />新增模型</Button>
+        <Button size="sm" @click="openAdd"><Plus class="size-4" />新增模型</Button>
       </div>
     </div>
 

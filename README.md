@@ -54,7 +54,9 @@ This project combines a routing server (LLM-Router-Server) with an easy-to-use m
 
 ### UX
 - Light / dark theme, dense "control-room" interface
-- Password-gated control actions (start / stop / add / remove)
+- **Admin-token-gated control** (start / stop / add / edit / remove) and
+  **API-key management** — mint/revoke keys that authenticate router inference,
+  with per-key usage attribution in the request log
 
 ---
 
@@ -91,8 +93,15 @@ npm run build        # outputs to dist/
 ```env
 VITE_API_BASE_URL=http://localhost:5000        # Dashboard backend (lifecycle, telemetry)
 VITE_ROUTER_BASE_URL=http://localhost:8887     # LLM Router (inference + /metrics + /reload)
-VITE_MODEL_CONTROL_PASSWORD=123                # gate for start / stop / add / remove
 ```
+
+> **Authentication** is backend-driven (not a build-time password). Set
+> `LLMOPS_ADMIN_TOKEN` on the backend + router to gate every control action
+> (start / stop / add / edit / remove + API-key management); the UI prompts for
+> the token once and reuses it for the session. Set `LLMOPS_REQUIRE_API_KEY=true`
+> on the router to require a bearer token (the admin token, or an API key minted
+> on the **API 金鑰** page) for all `/v1/*` inference. Both default to off for
+> local dev.
 
 > **Run all three services for full functionality**: the Dashboard Backend (`:5000`), the LLM Router (`:8887`), and the model instances the backend launches on demand. The backend and router both merge the dynamic-model overlay at startup, so models added from the UI survive restarts.
 
@@ -103,7 +112,7 @@ and started by a single Compose file. Requires Docker with the NVIDIA Container
 Toolkit (on WSL2, enable GPU support in Docker Desktop).
 
 ```bash
-cp deploy/.env.example deploy/.env   # set HF_TOKEN, which GPUs, the UI password
+cp deploy/.env.example deploy/.env   # set HF_TOKEN, which GPUs, the admin token
 make up                              # docker compose -f deploy/docker-compose.yaml up -d --build
 # open http://localhost:8884
 ```

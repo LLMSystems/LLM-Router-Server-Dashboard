@@ -77,8 +77,6 @@ services:
     build:
       context: ..
       dockerfile: deploy/frontend.Dockerfile
-      args:
-        VITE_MODEL_CONTROL_PASSWORD: ${VITE_MODEL_CONTROL_PASSWORD:-}
     image: llmops-frontend:latest
     container_name: llmops-frontend
     depends_on:

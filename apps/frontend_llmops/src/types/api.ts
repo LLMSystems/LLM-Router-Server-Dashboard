@@ -150,6 +150,23 @@ export interface OpenAIModelList {
   data: { id: string; object: string }[]
 }
 
+export interface ApiKey {
+  id: number
+  name: string
+  prefix: string
+  created_at: number
+  last_used_at: number | null
+  revoked: number
+}
+
+/** Returned once on creation — `key` is the plaintext, shown only here. */
+export interface CreatedKey {
+  id: number
+  name: string
+  prefix: string
+  key: string
+}
+
 export type SettingValue = string | number | boolean | null
 
 export interface ParsedModel {

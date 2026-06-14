@@ -14,9 +14,6 @@ COPY apps/frontend_llmops/ ./
 # proxies them. So no host/port is baked in and the image is portable.
 ENV VITE_API_BASE_URL="" \
     VITE_ROUTER_BASE_URL=""
-# The model-control password gate is a build-time constant; override at build.
-ARG VITE_MODEL_CONTROL_PASSWORD=""
-ENV VITE_MODEL_CONTROL_PASSWORD=$VITE_MODEL_CONTROL_PASSWORD
 RUN npm run build
 
 # --- serve stage ---

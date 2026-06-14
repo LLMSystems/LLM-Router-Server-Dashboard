@@ -10,6 +10,7 @@ from starlette.background import BackgroundTask
 from src.llm_router.backend_runtime_state import (decr_inflight, incr_inflight,
                                                   mark_backend_failure,
                                                   mark_backend_success)
+from src.llm_router.auth import authenticate
 from src.llm_router.backend_selector import select_instance_least_load
 from src.llm_router.overlay import load_config_with_overlay
 
@@ -73,7 +74,7 @@ def _scan_sse_for_usage(buffer: bytes, captured: dict) -> bytes:
 
 
 async def _record_request(app, model_key, instance_id, path, status_code, started,
-                          usage=None, error=None):
+                          usage=None, error=None, api_key_name=None):
     """Persist one request log row to the shared store. Best-effort, non-blocking
     to the response. `usage` is an OpenAI usage dict (from a buffered body or a
     streamed final chunk) when available."""
@@ -96,12 +97,13 @@ async def _record_request(app, model_key, instance_id, path, status_code, starte
             completion_tokens=completion_tokens,
             total_tokens=total_tokens,
             error=error,
+            api_key_name=api_key_name,
         )
     except Exception:
         logger.exception("Failed to record request log")
 
 
-async def _proxy_to_backend(request: Request, upstream_path: str) -> Response:
+async def _proxy_to_backend(request: Request, upstream_path: str, api_key_name=None) -> Response:
     """Forward an OpenAI-style request to the least-loaded backend instance.
 
     Shared by /v1/chat/completions and /v1/completions, which differ only in the
@@ -241,6 +243,7 @@ async def _proxy_to_backend(request: Request, upstream_path: str) -> Response:
                     await _record_request(
                         request.app, model_key, served_instance, upstream_path,
                         response.status_code, started, usage=captured["usage"],
+                        api_key_name=api_key_name,
                     )
 
             return StreamingResponse(
@@ -260,6 +263,7 @@ async def _proxy_to_backend(request: Request, upstream_path: str) -> Response:
                 _record_request,
                 request.app, model_key, instance_id, upstream_path,
                 response.status_code, started, _usage_from_body(content),
+                api_key_name=api_key_name,
             ),
         )
     except HTTPException:
@@ -274,7 +278,8 @@ async def _proxy_to_backend(request: Request, upstream_path: str) -> Response:
                 cooldown_seconds=10.0,
             )
         await _record_request(
-            request.app, model_key, instance_id, upstream_path, None, started, error=str(e)
+            request.app, model_key, instance_id, upstream_path, None, started, error=str(e),
+            api_key_name=api_key_name,
         )
         logger.exception("Unexpected error proxying to %s", upstream_path)
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -300,7 +305,8 @@ async def get_metrics(request: Request):
 
 @router.post("/v1/chat/completions")
 async def proxy_chat_completion(request: Request):
-    return await _proxy_to_backend(request, "/v1/chat/completions")
+    key_name = await authenticate(request)
+    return await _proxy_to_backend(request, "/v1/chat/completions", api_key_name=key_name)
 
 
 @router.get("/v1/models")
@@ -322,11 +328,13 @@ async def list_models(request: Request):
 
 @router.post("/v1/completions")
 async def proxy_completion(request: Request):
-    return await _proxy_to_backend(request, "/v1/completions")
+    key_name = await authenticate(request)
+    return await _proxy_to_backend(request, "/v1/completions", api_key_name=key_name)
 
 
 @router.post("/v1/embeddings")
 async def proxy_embeddings(request: Request):
+    await authenticate(request)
     try:
         config = request.app.state.config
         embedding_cfg = config.get("embedding_server", {})

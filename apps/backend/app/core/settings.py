@@ -45,10 +45,18 @@ class BackendSettings:
     max_restarts: int = 3
     # Exponential backoff base (seconds) between auto-restart attempts.
     restart_backoff_base: float = 5.0
+    # Shared admin token gating control/write operations + API-key management.
+    # Empty -> auth disabled (dev mode): writes are open and a warning is logged.
+    admin_token: str = ""
+
+    @property
+    def auth_enabled(self) -> bool:
+        return bool(self.admin_token)
 
     @classmethod
     def from_env(cls) -> "BackendSettings":
         return cls(
+            admin_token=os.environ.get("LLMOPS_ADMIN_TOKEN", "").strip(),
             poll_interval=_env_float("LLMOPS_POLL_INTERVAL", 2.0),
             start_timeout=_env_float("LLMOPS_START_TIMEOUT", 300.0),
             stop_timeout=_env_float("LLMOPS_STOP_TIMEOUT", 10.0),

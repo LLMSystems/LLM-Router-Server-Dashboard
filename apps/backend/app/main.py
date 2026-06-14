@@ -15,6 +15,7 @@ import httpx
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api import auth as auth_routes
 from app.api import config as config_routes
 from app.api import models as model_routes
 from app.api import observability as observability_routes
@@ -81,6 +82,11 @@ async def lifespan(app: FastAPI):
 
     logger.info("Config loaded from %s (%d instances)", config_path, len(registry.keys()))
     logger.info("Telemetry store at %s", store.db_path)
+    if not settings.auth_enabled:
+        logger.warning(
+            "LLMOPS_ADMIN_TOKEN not set — control endpoints are UNAUTHENTICATED. "
+            "Set it to require an admin token for start/stop/add/edit/remove."
+        )
 
     # Adopt anything already healthy before starting the loops, so state is
     # honest from the first response.
@@ -121,6 +127,7 @@ def create_app() -> FastAPI:
     app.include_router(system_routes.router, prefix="/api")
     app.include_router(config_routes.router, prefix="/api")
     app.include_router(observability_routes.router, prefix="/api")
+    app.include_router(auth_routes.router, prefix="/api")
 
     @app.get("/healthz", tags=["health"])
     async def healthz():

@@ -13,6 +13,7 @@ import StatusDot from '@/components/StatusDot.vue'
 import { useModelsStore } from '@/stores/models'
 import { useTrafficStore } from '@/stores/traffic'
 import { useModelControl } from '@/composables/useModelControl'
+import { useAuth } from '@/composables/useAuth'
 import { api, ApiError } from '@/lib/api'
 import { toast } from '@/lib/toast'
 import { formatDuration, formatLatency, formatNumber, formatPercent, formatTime } from '@/lib/utils'
@@ -25,6 +26,7 @@ const emit = defineEmits<{ deleted: [key: string]; edit: [key: string] }>()
 const models = useModelsStore()
 const traffic = useTrafficStore()
 const control = useModelControl()
+const { ensureUnlocked } = useAuth()
 
 const tab = ref('overview')
 const events = ref<StateEvent[]>([])
@@ -65,6 +67,7 @@ const startLockTitle = computed(() =>
 
 async function remove() {
   if (!model.value) return
+  if (!(await ensureUnlocked())) return
   const k = model.value.key
   try {
     await api.deleteModel(k)

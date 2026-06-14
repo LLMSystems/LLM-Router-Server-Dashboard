@@ -88,6 +88,7 @@ class FakeStore:
     def __init__(self):
         self.events = []  # (key, kind, from_state, to_state, detail)
         self.reqs = []    # kwargs dicts
+        self.api_keys = []  # list of dicts (incl. key_hash)
 
     async def record_model_event(self, key, kind, from_state, to_state, detail=None, ts=None):
         self.events.append((key, kind, from_state, to_state, detail))
@@ -112,6 +113,31 @@ class FakeStore:
         for r in self.reqs:
             agg[r.get("model_key")] = agg.get(r.get("model_key"), 0) + 1
         return [{"model_key": k, "count": c} for k, c in agg.items()]
+
+    # -- API keys --
+    async def create_api_key(self, name, key_hash, prefix, ts=None):
+        kid = len(self.api_keys) + 1
+        self.api_keys.append({
+            "id": kid, "name": name, "key_hash": key_hash, "prefix": prefix,
+            "created_at": ts or 0.0, "last_used_at": None, "revoked": 0,
+        })
+        return kid
+
+    async def list_api_keys(self):
+        return [{k: v for k, v in r.items() if k != "key_hash"} for r in reversed(self.api_keys)]
+
+    async def get_active_api_key_by_hash(self, key_hash):
+        for r in self.api_keys:
+            if r["key_hash"] == key_hash and not r["revoked"]:
+                return {"id": r["id"], "name": r["name"], "prefix": r["prefix"], "revoked": 0}
+        return None
+
+    async def revoke_api_key(self, key_id):
+        for r in self.api_keys:
+            if r["id"] == key_id and not r["revoked"]:
+                r["revoked"] = 1
+                return True
+        return False
 
 
 @pytest.fixture
@@ -154,4 +180,11 @@ def app(monkeypatch):
 
 @pytest.fixture
 def client(app):
+    return TestClient(app)
+
+
+@pytest.fixture
+def auth_client(app):
+    """Client with admin auth turned on (token = 'secret-admin')."""
+    app.state.settings = BackendSettings(admin_token="secret-admin")
     return TestClient(app)

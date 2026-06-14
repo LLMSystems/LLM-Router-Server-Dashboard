@@ -34,6 +34,12 @@ const router = createRouter({
       component: () => import('@/views/PlaygroundView.vue'),
     },
     {
+      path: '/keys',
+      name: 'keys',
+      meta: { title: 'API Keys' },
+      component: () => import('@/views/KeysView.vue'),
+    },
+    {
       path: '/usage',
       name: 'usage',
       meta: { title: '使用指南' },

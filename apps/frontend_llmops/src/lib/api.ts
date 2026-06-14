@@ -1,5 +1,7 @@
 import type {
+  ApiKey,
   ConfigSummary,
+  CreatedKey,
   CreateModelPayload,
   GpuProcess,
   HealthZ,
@@ -18,6 +20,33 @@ import type {
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:5000'
 const ROUTER_BASE = import.meta.env.VITE_ROUTER_BASE_URL ?? 'http://localhost:8887'
 
+// ---- Admin token --------------------------------------------------------
+// Gates backend writes (sent as X-Admin-Token) and authenticates the dashboard
+// against the router for inference (sent as Authorization: Bearer). Persisted so
+// it survives reloads; empty when auth is disabled or the operator hasn't unlocked.
+const ADMIN_TOKEN_KEY = 'llmops_admin_token'
+let adminToken = (typeof localStorage !== 'undefined' && localStorage.getItem(ADMIN_TOKEN_KEY)) || ''
+
+export function setAdminToken(token: string) {
+  adminToken = token
+  try {
+    localStorage.setItem(ADMIN_TOKEN_KEY, token)
+  } catch {
+    /* private mode / no storage — keep the in-memory value */
+  }
+}
+export function clearAdminToken() {
+  adminToken = ''
+  try {
+    localStorage.removeItem(ADMIN_TOKEN_KEY)
+  } catch {
+    /* ignore */
+  }
+}
+export function getAdminToken() {
+  return adminToken
+}
+
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -34,7 +63,11 @@ async function request<T>(base: string, path: string, init?: RequestInit): Promi
   try {
     res = await fetch(`${base}${path}`, {
       ...init,
-      headers: { 'Content-Type': 'application/json', ...init?.headers },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(adminToken ? { 'X-Admin-Token': adminToken } : {}),
+        ...init?.headers,
+      },
     })
   } catch (e) {
     throw new ApiError(0, `Network error reaching ${base}${path}`, e)
@@ -121,8 +154,35 @@ export const api = {
   /** SSE endpoint URL for the live model snapshot stream. */
   modelStreamUrl: () => `${API_BASE}/api/stream/models`,
 
-  /** Raw fetch against the Router for inference (chat/completions/embeddings). */
-  routerFetch: (path: string, init?: RequestInit) => fetch(`${ROUTER_BASE}${path}`, init),
+  /** Raw fetch against the Router for inference. Attaches the admin token as a
+   *  bearer so the dashboard keeps working when the router enforces API keys. */
+  routerFetch: (path: string, init?: RequestInit) =>
+    fetch(`${ROUTER_BASE}${path}`, {
+      ...init,
+      headers: {
+        ...(adminToken ? { Authorization: `Bearer ${adminToken}` } : {}),
+        ...init?.headers,
+      },
+    }),
+
+  // ---- Auth + API keys ------------------------------------------------------
+  authStatus: () => request<{ auth_enabled: boolean }>(API_BASE, '/api/auth/status'),
+  /** Validate a candidate admin token (not the stored one). */
+  authVerify: async (token: string): Promise<boolean> => {
+    try {
+      const res = await fetch(`${API_BASE}/api/auth/verify`, {
+        method: 'POST',
+        headers: { 'X-Admin-Token': token },
+      })
+      return res.ok
+    } catch {
+      return false
+    }
+  },
+  listKeys: () => request<ApiKey[]>(API_BASE, '/api/keys'),
+  createKey: (name: string) =>
+    request<CreatedKey>(API_BASE, '/api/keys', { method: 'POST', body: JSON.stringify({ name }) }),
+  revokeKey: (id: number) => request<null>(API_BASE, `/api/keys/${id}`, { method: 'DELETE' }),
 
   /** Best-effort: ask the Router to re-read config + overlay so newly-added
    *  models become routable. Returns false if the router is unreachable. */
