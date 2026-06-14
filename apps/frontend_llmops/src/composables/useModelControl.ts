@@ -1,4 +1,4 @@
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { useModelsStore } from '@/stores/models'
 import { toast } from '@/lib/toast'
 import { ApiError } from '@/lib/api'
@@ -20,8 +20,54 @@ const PASSWORD = import.meta.env.VITE_MODEL_CONTROL_PASSWORD ?? ''
 export function useModelControl() {
   const models = useModelsStore()
 
+  // Only one LLM may be in the `starting` phase at a time — loading two model
+  // weights at once OOMs a single GPU. Multiple *ready* LLMs are fine, and
+  // embeddings (a separate service) are unrestricted.
+  const isLlmStarting = computed(() => models.llms.some((m) => m.state === 'starting'))
+  function startingLlmName(): string | null {
+    const m = models.llms.find((x) => x.state === 'starting')
+    return m ? (m.key.split('::')[0] ?? m.key) : null
+  }
+  /** True if starting `key` right now would put a second LLM into `starting`. */
+  function isStartBlocked(key: string): boolean {
+    const m = models.byKey.get(key)
+    if (!m || m.kind !== 'llm') return false
+    return models.llms.some((x) => x.key !== key && x.state === 'starting')
+  }
+
+  /** Resolve once `key` has left the `starting` phase (ready/failed/stopped). */
+  function waitUntilNotStarting(key: string): Promise<void> {
+    return new Promise((resolve) => {
+      // Safety net: the backend caps `starting` via start_timeout, so this is
+      // only here to guarantee the queue can never wedge.
+      const deadline = Date.now() + 10 * 60 * 1000
+      const tick = () => {
+        const state = models.byKey.get(key)?.state
+        if (state !== 'starting' || Date.now() > deadline) resolve()
+        else setTimeout(tick, 400)
+      }
+      tick()
+    })
+  }
+
+  /** Start models one at a time, waiting for each to settle before the next. */
+  async function startSequential(keys: string[]) {
+    for (const key of keys) {
+      const m = models.byKey.get(key)
+      if (!m || m.state === 'ready' || m.state === 'starting') continue
+      await runOne(key, 'start')
+      await waitUntilNotStarting(key)
+    }
+  }
+
   async function runOne(key: string, action: Action, force = false) {
     const name = key.split('::')[0]
+    if (action === 'start' && isStartBlocked(key)) {
+      toast.warning('一次只能啟動一顆模型', {
+        description: `「${startingLlmName()}」正在啟動中，請待其完成後再啟動 ${name}。`,
+      })
+      return
+    }
     try {
       if (action === 'start') {
         await models.start(key, force)
@@ -46,7 +92,13 @@ export function useModelControl() {
   }
 
   function execute(keys: string[], action: Action) {
-    for (const key of keys) void runOne(key, action)
+    // Stops can fire in parallel; starts are serialised so two model weights
+    // never load at once.
+    if (action === 'stop') {
+      for (const key of keys) void runOne(key, 'stop')
+      return
+    }
+    void startSequential(keys)
   }
 
   function requestMany(keys: string[], action: Action) {
@@ -74,5 +126,15 @@ export function useModelControl() {
     return true
   }
 
-  return { unlocked, dialogOpen, pending, request, requestMany, submitPassword }
+  return {
+    unlocked,
+    dialogOpen,
+    pending,
+    request,
+    requestMany,
+    submitPassword,
+    isLlmStarting,
+    isStartBlocked,
+    startingLlmName,
+  }
 }

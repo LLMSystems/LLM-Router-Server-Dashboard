@@ -51,6 +51,11 @@ function fmtParam(v: string | number | boolean | null): string {
 }
 const isRunning = computed(() => !!model.value && ['ready', 'starting'].includes(model.value.state))
 const removable = computed(() => !!model.value && ['stopped', 'failed'].includes(model.value.state))
+// One LLM may start at a time: block this model's start while another is mid-start.
+const startLocked = computed(() => model.value?.kind === 'llm' && control.isLlmStarting.value)
+const startLockTitle = computed(() =>
+  startLocked.value ? `已有模型啟動中（${control.startingLlmName()}），請待其完成` : '啟動',
+)
 
 async function remove() {
   if (!model.value) return
@@ -150,7 +155,8 @@ const eventColor: Record<string, string> = {
             v-if="!isRunning"
             size="sm"
             variant="success"
-            :disabled="busy"
+            :disabled="busy || startLocked"
+            :title="startLockTitle"
             @click="control.request(model.key, 'start')"
           >
             <Loader2 v-if="busy" class="size-4 animate-spin" /><Play v-else class="size-4" />啟動

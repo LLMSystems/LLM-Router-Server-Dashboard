@@ -75,6 +75,13 @@ function isBusy(key: string) {
 function isRunning(state: ModelState) {
   return state === 'ready' || state === 'starting'
 }
+
+// One LLM may start at a time: block this group's start controls while another
+// LLM is mid-start (embeddings are unrestricted).
+const startLocked = computed(() => kind.value === 'llm' && control.isLlmStarting.value)
+const startLockTitle = computed(() =>
+  startLocked.value ? `已有模型啟動中（${control.startingLlmName()}），請待其完成` : '啟動',
+)
 </script>
 
 <template>
@@ -155,8 +162,8 @@ function isRunning(state: ModelState) {
             v-if="!isRunning(m.state)"
             size="icon-sm"
             variant="success"
-            :disabled="isBusy(m.key)"
-            title="啟動"
+            :disabled="isBusy(m.key) || startLocked"
+            :title="startLockTitle"
             @click.stop="control.request(m.key, 'start')"
           >
             <Loader2 v-if="isBusy(m.key)" class="size-3.5 animate-spin" /><Play v-else class="size-3.5" />
@@ -192,7 +199,8 @@ function isRunning(state: ModelState) {
         size="sm"
         variant="success"
         class="flex-1"
-        :disabled="!startableKeys.length"
+        :disabled="!startableKeys.length || startLocked"
+        :title="startLocked ? startLockTitle : '依序啟動所有實例'"
         @click="control.requestMany(startableKeys, 'start')"
       >
         <Play class="size-3.5" />全部啟動
