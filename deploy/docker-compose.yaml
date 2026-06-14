@@ -1,51 +1,88 @@
-version: "3.9"
-
-# Centralised deployment for the whole monorepo.
-# - backend-router: the Dashboard backend (5000) AND the LLM-Router-Server (8887)
-#   run in the SAME container (the backend manages router/model processes).
-# - frontend: the Vue dashboard dev/preview server (8884).
+# One-command deployment for the whole stack.
 #
-# Build contexts are the repo root (..) so the Dockerfiles in this folder can
-# COPY from apps/ and packages/ as needed.
+#   cp deploy/.env.example deploy/.env   # set HF_TOKEN / GPUs
+#   docker compose -f deploy/docker-compose.yaml up -d --build   (or: make up)
+#
+# Topology:
+#   backend  [GPU] — dashboard API (:5000); spawns vLLM subprocesses on :800x.
+#   router         — OpenAI-compatible router (:8887); shares the backend's
+#                    network namespace so it can reach those localhost vLLM ports.
+#   frontend       — nginx serving the SPA + reverse-proxying /api and /v1.
+#
+# Build context is the repo root (..) so the Dockerfiles can COPY apps/ + packages/.
 
 services:
-    backend-router:
-        build:
-            context: ..
-            dockerfile: deploy/backend-router.Dockerfile
-        image: llm-router:latest
-        container_name: llm-router-container
-        command: tail -f /dev/null
-        environment:
-            - NVIDIA_VISIBLE_DEVICES=all
-            # single source of truth for both backend and router config
-            - LLM_ROUTER_SERVER_CONFIG_PATH=/app/packages/config-schema/config.yaml
-        volumes:
-            - /etc/localtime:/etc/localtime:ro
-            - ..:/app
-        working_dir: /app
-        ports:
-            - "8887:8887"   # LLM-Router-Server API
-            - "5000:5000"   # Dashboard backend API
-        deploy:
-            resources:
-                reservations:
-                    devices:
-                        - driver: nvidia
-                          capabilities: [gpu]
-        restart: unless-stopped
+  backend:
+    build:
+      context: ..
+      dockerfile: deploy/engine.Dockerfile
+    image: llmops-engine:latest
+    container_name: llmops-backend
+    working_dir: /app/apps/backend
+    command: python -m uvicorn main:app --host 0.0.0.0 --port 5000
+    env_file: .env
+    environment:
+      # Backend reads LLM_ROUTER_SERVER_CONFIG_PATH; the router reads CONFIG_PATH.
+      - LLM_ROUTER_SERVER_CONFIG_PATH=/app/packages/config-schema/config.yaml
+      - LLMOPS_DB_PATH=/app/data/llmops.db
+      - LLMOPS_OVERLAY_PATH=/app/data/dynamic_models.json
+      - HF_HOME=/hf
+      - NVIDIA_VISIBLE_DEVICES=${NVIDIA_VISIBLE_DEVICES:-all}
+    volumes:
+      # Edit models without rebuilding: the canonical config is bind-mounted.
+      - ../packages/config-schema/config.yaml:/app/packages/config-schema/config.yaml
+      - llmops-data:/app/data          # shared SQLite + dynamic-model overlay
+      - hf-cache:/hf                    # persist downloaded model weights
+      - /etc/localtime:/etc/localtime:ro
+    ports:
+      - "5000:5000"   # dashboard backend API
+      - "8887:8887"   # router (lives in this namespace, so mapped here)
+    shm_size: "16gb"  # vLLM/torch need a large /dev/shm
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              capabilities: [gpu]
+    restart: unless-stopped
 
-    frontend:
-        build:
-            context: ..
-            dockerfile: deploy/frontend.Dockerfile
-        image: llm-router-server-dashboard:latest
-        container_name: LLM-Router-Server-Dashboard
-        command: tail -f /dev/null
-        volumes:
-            - /etc/localtime:/etc/localtime:ro
-            - ..:/app
-        working_dir: /app/apps/frontend
-        ports:
-            - "8884:8884"
-        restart: unless-stopped
+  router:
+    image: llmops-engine:latest
+    container_name: llmops-router
+    depends_on:
+      - backend
+    # Share the backend's network namespace -> localhost:800x reaches the vLLM
+    # subprocesses the backend spawned. (Cannot declare its own ports; 8887 is
+    # published on the backend service above.)
+    network_mode: "service:backend"
+    working_dir: /app/apps/router-server
+    command: gunicorn src.llm_router.main:app -c configs/gunicorn.conf.py
+    env_file: .env
+    environment:
+      - CONFIG_PATH=/app/packages/config-schema/config.yaml
+      - LLMOPS_DB_PATH=/app/data/llmops.db
+      - LLMOPS_OVERLAY_PATH=/app/data/dynamic_models.json
+      - PYTHONPATH=/app/apps/router-server
+    volumes:
+      - ../packages/config-schema/config.yaml:/app/packages/config-schema/config.yaml
+      - llmops-data:/app/data
+      - /etc/localtime:/etc/localtime:ro
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ..
+      dockerfile: deploy/frontend.Dockerfile
+      args:
+        VITE_MODEL_CONTROL_PASSWORD: ${VITE_MODEL_CONTROL_PASSWORD:-}
+    image: llmops-frontend:latest
+    container_name: llmops-frontend
+    depends_on:
+      - backend
+    ports:
+      - "${FRONTEND_PORT:-8884}:80"
+    restart: unless-stopped
+
+volumes:
+  llmops-data:
+  hf-cache:

@@ -5,8 +5,11 @@ VENV ?= .venv
 PY   := $(VENV)/bin/python
 PYTEST := $(PY) -m pytest
 
+COMPOSE := docker compose -f deploy/docker-compose.yaml
+
 .PHONY: help test test-backend test-router test-schema \
-        dev-backend dev-frontend build-frontend install-frontend
+        dev-backend dev-frontend build-frontend install-frontend \
+        up down logs ps build
 
 help:
 	@echo "Targets:"
@@ -17,6 +20,27 @@ help:
 	@echo "  dev-backend     Run the dashboard backend (uvicorn, :5000)"
 	@echo "  dev-frontend    Run the Vue dashboard dev server"
 	@echo "  build-frontend  Production build of the frontend"
+	@echo "  --- docker (deploy/docker-compose.yaml) ---"
+	@echo "  up              Build + start the whole stack in the background"
+	@echo "  down            Stop + remove the stack"
+	@echo "  logs            Tail logs from all services"
+	@echo "  ps              Show service status"
+	@echo "  build           Build images without starting"
+
+up:
+	$(COMPOSE) up -d --build
+
+down:
+	$(COMPOSE) down
+
+logs:
+	$(COMPOSE) logs -f
+
+ps:
+	$(COMPOSE) ps
+
+build:
+	$(COMPOSE) build
 
 test: test-backend test-router test-schema
 

@@ -1,6 +1,12 @@
 # Created by https://www.toptal.com/developers/gitignore/api/python,windows,linux
 # Edit at https://www.toptal.com/developers/gitignore?templates=python,windows,linux
 ./backend/logs
+
+# Env files (may contain secrets / HF tokens); keep the examples.
+.env
+**/.env
+!**/.env.example
+
 ### Linux ###
 *~
 # Byte-compiled / optimized / DLL files

@@ -96,57 +96,68 @@ VITE_MODEL_CONTROL_PASSWORD=123                # gate for start / stop / add / r
 
 > **Run all three services for full functionality**: the Dashboard Backend (`:5000`), the LLM Router (`:8887`), and the model instances the backend launches on demand. The backend and router both merge the dynamic-model overlay at startup, so models added from the UI survive restarts.
 
-### Backend Deployment
+### Docker Deployment (one command)
 
-**Important Note**: The backend needs to monitor LLM model status (process management), so it must run in the same container as LLM-Router-Server.
-
-#### 1. Build Container
+The whole stack — dashboard backend, LLM router, and the Vue frontend — is built
+and started by a single Compose file. Requires Docker with the NVIDIA Container
+Toolkit (on WSL2, enable GPU support in Docker Desktop).
 
 ```bash
-# backend + router share one container (see deploy/backend-router.Dockerfile)
-docker compose -f deploy/docker-compose.yaml up -d backend-router
+cp deploy/.env.example deploy/.env   # set HF_TOKEN, which GPUs, the UI password
+make up                              # docker compose -f deploy/docker-compose.yaml up -d --build
+# open http://localhost:8884
 ```
 
-**Ensure docker-compose.yaml exposes necessary ports**:
-- `8887`: LLM-Router-Server API
-- `5000`: Dashboard Backend API
-- Other model ports (e.g., 8002, 8003, etc.)
+`make down` stops it, `make logs` tails all services, `make ps` shows status.
 
-#### 2. Start Backend in Container
+**Topology** (see [`deploy/docker-compose.yaml`](deploy/docker-compose.yaml)):
+
+| Service    | Image                  | Port    | Role |
+|------------|------------------------|---------|------|
+| `backend`  | `llmops-engine` (GPU)  | 5000    | Dashboard API; spawns vLLM subprocesses on `:800x` |
+| `router`   | `llmops-engine`        | 8887    | OpenAI-compatible router; **shares the backend's network namespace** so it reaches those localhost vLLM ports |
+| `frontend` | `llmops-frontend`      | 8884    | nginx serving the SPA + reverse-proxying `/api` → backend and `/v1` → router |
+
+Why one image, two services: only the backend truly needs vLLM (it launches the
+subprocesses), and the router must see them on `localhost` — so a single
+[`engine.Dockerfile`](deploy/engine.Dockerfile) (based on the official
+`vllm/vllm-openai`) runs as two services joined by `network_mode: service:backend`.
+
+The frontend reaches the backend and router through nginx on a single origin, so
+no host/port is baked into the build. Persistent state lives in named volumes:
+`hf-cache` (downloaded model weights) and `llmops-data` (shared SQLite +
+dynamic-model overlay). The canonical `packages/config-schema/config.yaml` is
+bind-mounted, so you can edit models without rebuilding.
+
+> **Model lifecycle**: the router only routes and load-balances — it never
+> launches models. vLLM instances (and the Embedding/Reranker server) are owned
+> by the backend and started on demand from the **Models** page (or
+> `POST /api/models/{key}/start`). The backend and router both merge the
+> dynamic-model overlay at startup, so models added from the UI survive restarts.
+
+#### Verify
 
 ```bash
-# Enter the container
-docker exec -it <container_id> bash
-
-# Start backend
-cd /app/apps/backend
-pip install -r requirements.txt
-uvicorn main:app --reload --host 0.0.0.0 --port 5000
+curl http://localhost:8887/v1/models     # router: configured model groups
+curl http://localhost:5000/api/models    # backend: lifecycle state of each instance
 ```
 
-### LLM-Router-Server Deployment
-For installation and startup details, refer to [LLM-Router-Server Startup Guide](apps/router-server/README.md)
-#### 1. Start Router Server in Container
+### Manual / development run
+
+Run the three pieces yourself (Python deps in the repo-root `.venv`):
 
 ```bash
-cd /app/apps/router-server
-pip install -r requirements.txt
+# Dashboard backend (:5000)
+cd apps/backend && pip install -r requirements.txt
+uvicorn main:app --host 0.0.0.0 --port 5000
+
+# LLM router (:8887)  — see apps/router-server/README.md for details
+cd apps/router-server && pip install -r requirements.txt
 sh scripts/start_all.sh ../../packages/config-schema/config.yaml ./configs/gunicorn.conf.py
 ```
 
-**Note**: Use `packages/config-schema/config.yaml` as the single source of truth so the frontend, backend, and router all read the same configuration.
-
-**Model lifecycle**: the router only routes and load-balances — it no longer launches models. Model processes (vLLM instances, Embedding/Reranker server) are owned by the Dashboard backend and started on demand via `POST /api/models/{key}/start`.
-
-#### 2. Verify Service Status
-
-```bash
-# Check router server (lists configured model groups)
-curl http://localhost:8887/v1/models
-
-# Check backend API (lifecycle state of every model instance)
-curl http://localhost:5000/api/models
-```
+Use `packages/config-schema/config.yaml` as the single source of truth so the
+frontend, backend, and router all read the same configuration.
 
 ---
 

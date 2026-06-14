@@ -1,0 +1,20 @@
+# Keep the build context small + reproducible. Context is the repo root.
+.git
+.venv
+**/__pycache__
+**/.pytest_cache
+**/*.pyc
+
+# Frontend: never ship local installs/builds; the image runs `npm ci` + build.
+apps/frontend_llmops/node_modules
+apps/frontend_llmops/dist
+apps/frontend/node_modules
+
+# Local runtime state (mounted as volumes at run time, not baked in).
+data
+data0
+**/logs
+
+# Deprecated app + docs/assets not needed in any image.
+apps/frontend
+assets
