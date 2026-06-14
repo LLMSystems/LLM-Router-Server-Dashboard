@@ -34,6 +34,12 @@ const router = createRouter({
       component: () => import('@/views/PlaygroundView.vue'),
     },
     {
+      path: '/usage',
+      name: 'usage',
+      meta: { title: '使用指南' },
+      component: () => import('@/views/UsageView.vue'),
+    },
+    {
       path: '/resources',
       name: 'resources',
       meta: { title: 'Resources' },

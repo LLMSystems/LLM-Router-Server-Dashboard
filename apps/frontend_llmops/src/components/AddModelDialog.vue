@@ -114,11 +114,11 @@ async function submit() {
       instance: { id: instanceId.value, host: host.value, port: port.value, cuda_device: cudaDevice.value },
       settings,
     })
-    toast.success(`已新增 ${view.key}`, { description: ‘目前已停止 — 請按「啟動」以啟用。’ })
-    // Make it routable end-to-end by refreshing the router’s view of the config.
+    toast.success(`已新增 ${view.key}`, { description: '目前已停止 — 請按「啟動」以啟用。' })
+    // Make it routable end-to-end by refreshing the router's view of the config.
     if (!(await api.routerReload())) {
-      toast.warning(‘路由器未重新整理’, {
-        description: ‘模型已新增，但路由器無法連線 — 重新載入前將無法路由至此模型。’,
+      toast.warning('路由器未重新整理', {
+        description: '模型已新增，但路由器無法連線 — 重新載入前將無法路由至此模型。',
       })
     }
     emit('created', view.key)

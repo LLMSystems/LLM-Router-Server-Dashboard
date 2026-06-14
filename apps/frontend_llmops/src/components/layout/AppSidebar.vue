@@ -4,6 +4,7 @@ import { RouterLink, useRoute } from 'vue-router'
 import {
   Activity,
   ArrowLeftRight,
+  BookOpen,
   Cpu,
   LayoutDashboard,
   Server,
@@ -47,6 +48,7 @@ const nav = [
   { to: '/traffic', label: '流量', icon: ArrowLeftRight },
   { to: '/trends', label: '趨勢', icon: TrendingUp },
   { to: '/playground', label: '測試台', icon: TerminalSquare },
+  { to: '/usage', label: '使用指南', icon: BookOpen },
   { to: '/resources', label: '資源', icon: Cpu },
   { to: '/activity', label: '活動', icon: Activity },
 ]
