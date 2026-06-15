@@ -27,9 +27,26 @@ const target = ref<'router' | 'instance'>('router')
 const instanceKey = ref('')
 const dataset = ref<'random' | 'openqa'>('random')
 const endpoint = ref<'chat' | 'completions'>('chat')
-const mode = ref<'sweep' | 'sla'>('sweep')
+const mode = ref<'sweep' | 'openloop' | 'multiturn' | 'sla'>('sweep')
+const MODES = [
+  { v: 'sweep', label: '並發 Sweep' },
+  { v: 'openloop', label: '速率 Open-loop' },
+  { v: 'multiturn', label: '多輪對話' },
+  { v: 'sla', label: 'SLA 調優' },
+] as const
 const parallelInput = ref('1,4,8,16')
+const rateInput = ref('5,10,20')
 const reqPerPoint = ref(50)
+// multi-turn
+const mtDataset = ref<'share_gpt_zh_multi_turn' | 'random_multi_turn' | 'custom_multi_turn'>('share_gpt_zh_multi_turn')
+const mtDatasetPath = ref('')
+const mtConcurrentInput = ref('4')
+const mtTotal = ref(20)
+const minTurns = ref(2)
+const maxTurns = ref(4)
+const mtConcurrent = computed(() =>
+  mtConcurrentInput.value.split(',').map((s) => parseInt(s.trim(), 10)).filter((n) => n > 0),
+)
 const maxTokens = ref(256)
 const promptLen = ref(512)
 const warmup = ref(0.1)
@@ -68,6 +85,9 @@ const instanceOptions = computed(() =>
 )
 const parallel = computed(() =>
   parallelInput.value.split(',').map((s) => parseInt(s.trim(), 10)).filter((n) => n > 0),
+)
+const rates = computed(() =>
+  rateInput.value.split(',').map((s) => parseInt(s.trim(), 10)).filter((n) => n > 0),
 )
 
 watch(groups, (g) => {
@@ -163,6 +183,27 @@ async function launch() {
       sla_num_runs: slaNumRuns.value,
       sla_fixed_parallel: slaVariable.value === 'rate' ? slaFixedParallel.value : undefined,
     }
+  } else if (mode.value === 'openloop') {
+    if (!rates.value.length) {
+      toast.error('請輸入至少一個速率')
+      return
+    }
+    req = { ...common, rate: rates.value, number: rates.value.map(() => reqPerPoint.value) }
+  } else if (mode.value === 'multiturn') {
+    if (!mtConcurrent.value.length) {
+      toast.error('請輸入至少一個並發對話數')
+      return
+    }
+    req = {
+      ...common,
+      endpoint: 'chat', // multi-turn replays a conversation — chat only
+      parallel: mtConcurrent.value,
+      number: mtConcurrent.value.map(() => mtTotal.value),
+      mt_dataset: mtDataset.value,
+      mt_dataset_path: mtDataset.value === 'custom_multi_turn' ? mtDatasetPath.value : undefined,
+      min_turns: minTurns.value,
+      max_turns: maxTurns.value,
+    }
   } else {
     if (!parallel.value.length) {
       toast.error('請輸入至少一個並發數')
@@ -243,6 +284,8 @@ const aggregates = computed(() => {
   }
   return { duration: dur, generated: gen, rate: dur ? gen / dur : 0 }
 })
+const isOpenLoop = computed(() => parsedParams.value.mode === 'openloop')
+const mtPoint = computed(() => points.value.find((p) => p.turns != null) ?? null)
 const expanded = ref<string | null>(null)
 function toggle(label: string) {
   expanded.value = expanded.value === label ? null : label
@@ -271,15 +314,15 @@ const statusColor: Record<string, string> = {
             <option v-for="g in groups" :key="g" :value="g">{{ g }}{{ groupReady(g) ? '' : '（未啟動）' }}</option>
           </select>
         </label>
-        <div class="inline-flex w-full rounded-lg border border-border/60 bg-muted/40 p-0.5">
+        <div class="grid grid-cols-2 gap-1 rounded-lg border border-border/60 bg-muted/40 p-0.5">
           <button
-            v-for="m in (['sweep', 'sla'] as const)"
-            :key="m"
-            class="flex-1 rounded-md px-3 py-1 text-xs font-medium transition-colors"
-            :class="mode === m ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'"
-            @click="mode = m"
+            v-for="m in MODES"
+            :key="m.v"
+            class="rounded-md px-2 py-1 text-xs font-medium transition-colors"
+            :class="mode === m.v ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'"
+            @click="mode = m.v"
           >
-            {{ m === 'sweep' ? '並發 Sweep' : 'SLA 自動調優' }}
+            {{ m.label }}
           </button>
         </div>
         <label class="block">
@@ -295,7 +338,8 @@ const statusColor: Record<string, string> = {
             <option v-for="k in instanceOptions" :key="k" :value="k">{{ k.split('::')[1] }}</option>
           </select>
         </label>
-        <div class="grid grid-cols-2 gap-2">
+        <!-- Multi-turn uses its own dataset (below) and is always chat. -->
+        <div v-if="mode !== 'multiturn'" class="grid grid-cols-2 gap-2">
           <label class="block">
             <span class="text-xs text-muted-foreground">資料集</span>
             <select v-model="dataset" class="mt-1 h-9 w-full rounded-md border border-input bg-background/40 px-2 text-sm">
@@ -329,8 +373,56 @@ const statusColor: Record<string, string> = {
           </div>
         </template>
 
+        <!-- Open-loop: arrival-rate sweep (Poisson; parallel ignored) -->
+        <template v-else-if="mode === 'openloop'">
+          <label class="block">
+            <span class="text-xs text-muted-foreground">速率（req/s，逗號分隔，掃描）</span>
+            <Input v-model="rateInput" placeholder="5,10,20" class="mt-1 font-mono" />
+          </label>
+          <label class="block">
+            <span class="text-xs text-muted-foreground">每速率請求數</span>
+            <Input v-model.number="reqPerPoint" type="number" min="1" class="mt-1" />
+          </label>
+        </template>
+
+        <!-- Multi-turn conversations -->
+        <template v-else-if="mode === 'multiturn'">
+          <label class="block">
+            <span class="text-xs text-muted-foreground">資料集</span>
+            <select v-model="mtDataset" class="mt-1 h-9 w-full rounded-md border border-input bg-background/40 px-2 text-sm">
+              <option value="share_gpt_zh_multi_turn">ShareGPT 中文（真實對話）</option>
+              <option value="random_multi_turn">random（隨機生成）</option>
+              <option value="custom_multi_turn">custom（自備 JSONL）</option>
+            </select>
+          </label>
+          <label v-if="mtDataset === 'custom_multi_turn'" class="block">
+            <span class="text-xs text-muted-foreground">資料路徑（伺服器端 JSONL）</span>
+            <Input v-model="mtDatasetPath" placeholder="/app/data/convos.jsonl" class="mt-1 font-mono text-xs" />
+          </label>
+          <div class="grid grid-cols-2 gap-2">
+            <label class="block">
+              <span class="text-xs text-muted-foreground">並發對話數（可逗號掃描）</span>
+              <Input v-model="mtConcurrentInput" placeholder="4 或 2,4,8" class="mt-1 font-mono" />
+            </label>
+            <label class="block">
+              <span class="text-xs text-muted-foreground">每點對話數</span>
+              <Input v-model.number="mtTotal" type="number" min="1" class="mt-1" />
+            </label>
+          </div>
+          <div class="grid grid-cols-2 gap-2">
+            <label class="block">
+              <span class="text-xs text-muted-foreground">最少輪數</span>
+              <Input v-model.number="minTurns" type="number" min="1" class="mt-1" />
+            </label>
+            <label class="block">
+              <span class="text-xs text-muted-foreground">最多輪數</span>
+              <Input v-model.number="maxTurns" type="number" min="1" class="mt-1" />
+            </label>
+          </div>
+        </template>
+
         <!-- SLA-specific (conditions OR-ed; each runs its own binary search) -->
-        <template v-else>
+        <template v-else-if="mode === 'sla'">
           <label class="block">
             <span class="text-xs text-muted-foreground">搜尋變數</span>
             <select v-model="slaVariable" class="mt-1 h-9 w-full rounded-md border border-input bg-background/40 px-2 text-sm">
@@ -488,11 +580,34 @@ const statusColor: Record<string, string> = {
           </Card>
         </div>
 
-        <!-- Charts: throughput + decode + tail latency vs concurrency -->
-        <div v-if="points.length" class="grid gap-4 lg:grid-cols-3">
-          <Card class="p-4"><PerfSweepChart :points="points" :metric="(p: PerfPoint) => p.rps" label="RPS（req/s）" color="var(--chart-1)" :format="(v) => v.toFixed(1)" /></Card>
-          <Card class="p-4"><PerfSweepChart :points="points" :metric="(p: PerfPoint) => p.output_tps" label="輸出吞吐 Gen/s（tok/s）" color="var(--chart-2)" :format="(v) => formatNumber(Math.round(v))" /></Card>
-          <Card class="p-4"><PerfSweepChart :points="points" :metric="(p: PerfPoint) => p.ttft_p99 ?? p.avg_ttft" label="TTFT p99（ms）" color="var(--chart-4)" :format="(v) => `${Math.round(v)}`" /></Card>
+        <!-- Multi-turn aggregate metrics (only present for multi-turn runs) -->
+        <Card v-if="mtPoint" class="p-4">
+          <p class="mb-2 text-xs font-medium text-muted-foreground">多輪指標</p>
+          <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <div class="rounded-lg border border-border/60 bg-background/40 p-3 text-center">
+              <p class="text-lg font-semibold tabular">{{ mtPoint.turns?.toFixed(1) ?? '—' }}</p>
+              <p class="text-xs text-muted-foreground">輪數/對話</p>
+            </div>
+            <div class="rounded-lg border border-border/60 bg-background/40 p-3 text-center">
+              <p class="text-lg font-semibold tabular">{{ mtPoint.cache_hit != null ? `${mtPoint.cache_hit.toFixed(1)}%` : '—' }}</p>
+              <p class="text-xs text-muted-foreground">KV 快取命中</p>
+            </div>
+            <div class="rounded-lg border border-border/60 bg-background/40 p-3 text-center">
+              <p class="text-lg font-semibold tabular">{{ mtPoint.first_ttft != null ? `${mtPoint.first_ttft.toFixed(0)}ms` : '—' }}</p>
+              <p class="text-xs text-muted-foreground">首輪 TTFT</p>
+            </div>
+            <div class="rounded-lg border border-border/60 bg-background/40 p-3 text-center">
+              <p class="text-lg font-semibold tabular">{{ mtPoint.subsequent_ttft != null ? `${mtPoint.subsequent_ttft.toFixed(0)}ms` : '—' }}</p>
+              <p class="text-xs text-muted-foreground">後續輪 TTFT</p>
+            </div>
+          </div>
+        </Card>
+
+        <!-- Charts: throughput + decode + tail latency (need ≥2 points for a curve) -->
+        <div v-if="points.length > 1" class="grid gap-4 lg:grid-cols-3">
+          <Card class="p-4"><PerfSweepChart :points="points" :metric="(p: PerfPoint) => p.rps" label="RPS（req/s）" color="var(--chart-1)" :format="(v) => v.toFixed(1)" :x-label="isOpenLoop ? '速率' : '並發'" /></Card>
+          <Card class="p-4"><PerfSweepChart :points="points" :metric="(p: PerfPoint) => p.output_tps" label="輸出吞吐 Gen/s（tok/s）" color="var(--chart-2)" :format="(v) => formatNumber(Math.round(v))" :x-label="isOpenLoop ? '速率' : '並發'" /></Card>
+          <Card class="p-4"><PerfSweepChart :points="points" :metric="(p: PerfPoint) => p.ttft_p99 ?? p.avg_ttft" label="TTFT p99（ms）" color="var(--chart-4)" :format="(v) => `${Math.round(v)}`" :x-label="isOpenLoop ? '速率' : '並發'" /></Card>
         </div>
 
         <!-- Table (click a row for avg/p50/p99/max detail) -->
@@ -501,7 +616,7 @@ const statusColor: Record<string, string> = {
             <table class="w-full text-sm">
               <thead class="border-b border-border/60 text-xs text-muted-foreground">
                 <tr class="[&>th]:px-3 [&>th]:py-2 [&>th]:text-right [&>th]:font-medium [&>th:first-child]:text-left">
-                  <th>並發</th><th>RPS</th><th>Gen/s</th><th>Total tok/s</th><th>平均延遲</th><th>TTFT</th><th>TTFT p99</th><th>TPOT</th><th>ITL</th><th>延遲 p99</th><th>輸入/輸出</th><th>成功/總數</th>
+                  <th>{{ isOpenLoop ? '速率' : '並發' }}</th><th>RPS</th><th>Gen/s</th><th>Total tok/s</th><th>平均延遲</th><th>TTFT</th><th>TTFT p99</th><th>TPOT</th><th>ITL</th><th>延遲 p99</th><th>輸入/輸出</th><th>成功/總數</th>
                 </tr>
               </thead>
               <tbody>
@@ -511,7 +626,7 @@ const statusColor: Record<string, string> = {
                     @click="toggle(p.label)"
                   >
                     <td class="font-mono">
-                      <ChevronDown class="mr-1 inline size-3 transition-transform" :class="expanded === p.label && 'rotate-180'" />{{ p.concurrency ?? p.rate }}
+                      <ChevronDown class="mr-1 inline size-3 transition-transform" :class="expanded === p.label && 'rotate-180'" />{{ p.concurrency != null && p.concurrency > 0 ? p.concurrency : p.rate }}
                     </td>
                     <td class="tabular">{{ p.rps?.toFixed(2) ?? '—' }}</td>
                     <td class="tabular">{{ formatNumber(Math.round(p.output_tps ?? 0)) }}</td>

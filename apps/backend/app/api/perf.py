@@ -25,7 +25,7 @@ def _store(request: Request):
 class PerfRequest(BaseModel):
     model: str  # model group
     name: Optional[str] = None
-    mode: Literal["sweep", "sla"] = "sweep"
+    mode: Literal["sweep", "openloop", "multiturn", "sla"] = "sweep"
     target: Literal["router", "instance"] = "router"
     instance_key: Optional[str] = None
     dataset: Literal["random", "openqa"] = "random"
@@ -34,10 +34,19 @@ class PerfRequest(BaseModel):
     min_prompt_length: int = Field(default=512, ge=1)
     max_prompt_length: int = Field(default=512, ge=1)
     stream: bool = True
-    # sweep mode
+    # sweep / multiturn (parallel) — and number is shared by all closed-loop modes
     parallel: Optional[list[int]] = None
     number: Optional[list[int]] = None
     warmup_num: Optional[float] = None
+    # open-loop mode (arrival rate sweep)
+    rate: Optional[list[int]] = None
+    # multi-turn mode
+    mt_dataset: Literal["share_gpt_zh_multi_turn", "random_multi_turn", "custom_multi_turn"] = (
+        "share_gpt_zh_multi_turn"
+    )
+    mt_dataset_path: Optional[str] = None  # for custom_multi_turn (server-side JSONL path)
+    min_turns: int = Field(default=2, ge=1)
+    max_turns: int = Field(default=4, ge=1)
     # sla auto-tune mode
     sla_variable: Literal["parallel", "rate"] = "parallel"
     sla_params: Optional[list[dict[str, str]]] = None  # [{metric: "op value"}], groups OR-ed
@@ -57,7 +66,17 @@ async def start_run(body: PerfRequest, request: Request):
     if body.mode == "sla":
         if not body.sla_params:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "sla_params is required in SLA mode")
-    else:
+    elif body.mode == "openloop":
+        if not body.rate or not body.number:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "rate and number are required in open-loop mode")
+        if len(body.rate) != len(body.number):
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "rate and number must be the same length")
+    elif body.mode == "multiturn":
+        if not body.parallel or not body.number:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "parallel and number are required in multi-turn mode")
+        if body.mt_dataset == "custom_multi_turn" and not body.mt_dataset_path:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "mt_dataset_path is required for custom_multi_turn")
+    else:  # sweep
         if not body.parallel or not body.number:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "parallel and number are required in sweep mode")
         if len(body.parallel) != len(body.number):

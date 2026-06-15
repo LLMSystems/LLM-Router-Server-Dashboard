@@ -22,6 +22,19 @@ def test_start_sla_requires_params(client):
     assert resp.status_code == 400
 
 
+def test_start_openloop_requires_rate(client):
+    resp = client.post("/api/perf", json={"model": "Qwen3-0.6B", "mode": "openloop", "number": [20]})
+    assert resp.status_code == 400
+
+
+def test_start_multiturn_custom_requires_path(client):
+    resp = client.post("/api/perf", json={
+        "model": "Qwen3-0.6B", "mode": "multiturn", "mt_dataset": "custom_multi_turn",
+        "parallel": [4], "number": [20],
+    })
+    assert resp.status_code == 400
+
+
 def test_start_unknown_model_is_400(client):
     resp = client.post("/api/perf", json={
         "model": "nope", "parallel": [1], "number": [10],

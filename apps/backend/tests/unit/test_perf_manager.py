@@ -47,6 +47,31 @@ def test_build_cfg_instance_target_uses_port_and_tag(tmp_path):
     assert "extra_args" not in cfg  # openqa: no random-specific knobs
 
 
+def test_build_cfg_openloop(tmp_path):
+    pm = _manager(tmp_path)
+    cfg = pm._build_cfg(
+        {"model": "Qwen2.5-0.5B", "mode": "openloop", "dataset": "random",
+         "rate": [5, 10], "number": [20, 40], "max_tokens": 64},
+        str(tmp_path / "1"),
+    )
+    assert cfg["open_loop"] is True
+    assert cfg["rate"] == [5, 10] and cfg["number"] == [20, 40]
+    assert "parallel" not in cfg
+
+
+def test_build_cfg_multiturn(tmp_path):
+    pm = _manager(tmp_path)
+    cfg = pm._build_cfg(
+        {"model": "Qwen2.5-0.5B", "mode": "multiturn", "mt_dataset": "share_gpt_zh_multi_turn",
+         "parallel": [4], "number": [20], "min_turns": 2, "max_turns": 3, "max_tokens": 64},
+        str(tmp_path / "1"),
+    )
+    assert cfg["multi_turn"] is True
+    assert cfg["dataset"] == "share_gpt_zh_multi_turn"
+    assert cfg["max_turns"] == 3 and cfg["parallel"] == [4]
+    assert "extra_args" not in cfg  # multi-turn dataset, not "random"
+
+
 def test_resolve_unknown_group_and_instance(tmp_path):
     pm = _manager(tmp_path)
     with pytest.raises(PerfError):

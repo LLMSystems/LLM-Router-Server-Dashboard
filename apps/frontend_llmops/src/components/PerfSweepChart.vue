@@ -9,9 +9,15 @@ const props = withDefaults(
     label: string
     color?: string
     format?: (v: number) => string
+    xLabel?: string
   }>(),
-  { color: 'var(--chart-1)', format: (v: number) => `${Math.round(v)}` },
+  { color: 'var(--chart-1)', format: (v: number) => `${Math.round(v)}`, xLabel: '並發' },
 )
+
+// x = concurrency for closed-loop; for open-loop (concurrency = -1) fall back to rate.
+function xVal(p: PerfPoint): number | null {
+  return p.concurrency != null && p.concurrency > 0 ? p.concurrency : p.rate
+}
 
 const W = 320
 const H = 170
@@ -22,8 +28,8 @@ const PAD_B = 26
 
 const pts = computed(() =>
   props.points
-    .filter((p) => p.concurrency != null && props.metric(p) != null)
-    .map((p) => ({ x: p.concurrency as number, y: props.metric(p) as number }))
+    .filter((p) => xVal(p) != null && props.metric(p) != null)
+    .map((p) => ({ x: xVal(p) as number, y: props.metric(p) as number }))
     .sort((a, b) => a.x - b.x),
 )
 const xMin = computed(() => (pts.value.length ? pts.value[0]!.x : 0))
@@ -67,7 +73,7 @@ const yTicks = computed(() => [0, 0.5, 1].map((f) => ({ v: yMax.value * f, y: py
         </text>
       </g>
       <text :x="(PAD_L + W - PAD_R) / 2" :y="H - 2" text-anchor="middle" class="fill-muted-foreground" style="font-size: 9px">
-        並發
+        {{ xLabel }}
       </text>
     </svg>
   </div>

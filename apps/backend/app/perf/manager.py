@@ -81,16 +81,19 @@ class PerfManager:
             "no_timestamp": True,
             "name": "run",
         }
-        if cfg["dataset"] == "random":
-            cfg.update({
-                "min_tokens": cfg["max_tokens"],  # fixed output length for fair comparison
-                "min_prompt_length": req.get("min_prompt_length", 512),
-                "max_prompt_length": req.get("max_prompt_length", 512),
-                "prefix_length": 0,
-                "extra_args": {"ignore_eos": True},
-            })
+        def _random_knobs():
+            if cfg["dataset"] == "random":
+                cfg.update({
+                    "min_tokens": cfg["max_tokens"],  # fixed output length for fair comparison
+                    "min_prompt_length": req.get("min_prompt_length", 512),
+                    "max_prompt_length": req.get("max_prompt_length", 512),
+                    "prefix_length": 0,
+                    "extra_args": {"ignore_eos": True},
+                })
 
-        if req.get("mode") == "sla":
+        mode = req.get("mode", "sweep")
+        if mode == "sla":
+            _random_knobs()
             variable = req.get("sla_variable", "parallel")
             lo = req.get("sla_lower_bound", 1)
             cfg.update({
@@ -107,7 +110,22 @@ class PerfManager:
                 cfg["sla_fixed_parallel"] = req.get("sla_fixed_parallel", 10)
             else:
                 cfg["parallel"] = lo
-        else:  # sweep
+        elif mode == "openloop":
+            _random_knobs()
+            cfg.update({"open_loop": True, "rate": req["rate"], "number": req["number"]})
+        elif mode == "multiturn":
+            cfg.update({
+                "multi_turn": True,
+                "dataset": req.get("mt_dataset", "share_gpt_zh_multi_turn"),  # real bounded chats
+                "min_turns": req.get("min_turns", 2),
+                "max_turns": req.get("max_turns", 4),
+                "parallel": req["parallel"],
+                "number": req["number"],
+            })
+            if req.get("mt_dataset_path"):
+                cfg["dataset_path"] = req["mt_dataset_path"]
+        else:  # sweep (closed-loop)
+            _random_knobs()
             cfg["parallel"] = req["parallel"]
             cfg["number"] = req["number"]
             if req.get("warmup_num"):
@@ -225,6 +243,11 @@ class PerfManager:
                 "latency_p50": p50.get("latency"), "latency_p99": p99.get("latency"), "latency_max": pmax.get("latency"),
                 "ttft_p50": p50.get("ttft"), "ttft_p99": p99.get("ttft"), "ttft_max": pmax.get("ttft"),
                 "tpot_p50": p50.get("tpot"), "tpot_p99": p99.get("tpot"), "tpot_max": pmax.get("tpot"),
+                # multi-turn only (None otherwise)
+                "turns": m.get("avg_turns"),
+                "cache_hit": m.get("avg_cached_percent"),
+                "first_ttft": m.get("avg_first_turn_ttft"),
+                "subsequent_ttft": m.get("avg_subsequent_turn_ttft"),
             })
         points.sort(key=lambda p: (p.get("concurrency") or 0, p.get("rate") or 0))
         return {"points": points, "sla": sla}

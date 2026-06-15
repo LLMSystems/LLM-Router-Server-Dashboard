@@ -242,6 +242,11 @@ export interface PerfPoint {
   tpot_p50: number | null
   tpot_p99: number | null
   tpot_max: number | null
+  // multi-turn only
+  turns: number | null
+  cache_hit: number | null
+  first_ttft: number | null
+  subsequent_ttft: number | null
 }
 
 export interface SlaTracePoint {
@@ -284,7 +289,7 @@ export interface PerfRun {
 export interface PerfRequest {
   model: string
   name?: string
-  mode: 'sweep' | 'sla'
+  mode: 'sweep' | 'openloop' | 'multiturn' | 'sla'
   target: 'router' | 'instance'
   instance_key?: string
   dataset: 'random' | 'openqa'
@@ -293,10 +298,17 @@ export interface PerfRequest {
   min_prompt_length: number
   max_prompt_length: number
   stream: boolean
-  // sweep
+  // sweep / multiturn
   parallel?: number[]
   number?: number[]
   warmup_num?: number
+  // open-loop
+  rate?: number[]
+  // multi-turn
+  mt_dataset?: 'share_gpt_zh_multi_turn' | 'random_multi_turn' | 'custom_multi_turn'
+  mt_dataset_path?: string
+  min_turns?: number
+  max_turns?: number
   // sla auto-tune
   sla_variable?: 'parallel' | 'rate'
   sla_params?: Record<string, string>[]
