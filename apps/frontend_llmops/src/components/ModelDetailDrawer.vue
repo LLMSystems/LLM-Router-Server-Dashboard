@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { Loader2, Pencil, Play, RefreshCw, Square, Trash2 } from '@lucide/vue'
+import { Download, Loader2, Pencil, Play, RefreshCw, Search, Square, Trash2 } from '@lucide/vue'
 import Sheet from '@/components/ui/Sheet.vue'
 import Tabs from '@/components/ui/Tabs.vue'
 import TabsList from '@/components/ui/TabsList.vue'
@@ -34,6 +34,27 @@ const events = ref<StateEvent[]>([])
 const logs = ref('')
 const logsError = ref<string | null>(null)
 const loadingLogs = ref(false)
+const logFilter = ref('')
+
+const filteredLogs = computed(() => {
+  if (!logFilter.value.trim()) return logs.value
+  const q = logFilter.value.toLowerCase()
+  return logs.value
+    .split('\n')
+    .filter((line) => line.toLowerCase().includes(q))
+    .join('\n')
+})
+
+function downloadLogs() {
+  if (!logs.value || !props.modelKey) return
+  const blob = new Blob([logs.value], { type: 'text/plain' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `${props.modelKey.replace('::', '__')}.log`
+  a.click()
+  URL.revokeObjectURL(url)
+}
 
 const model = computed(() => (props.modelKey ? models.byKey.get(props.modelKey) : undefined))
 const engine = computed(() => (props.modelKey ? models.engineConfig(props.modelKey) : null))
@@ -392,18 +413,28 @@ const eventColor: Record<string, string> = {
 
         <!-- Logs -->
         <TabsContent value="logs" class="mt-4 space-y-2">
-          <div class="flex items-center justify-between">
-            <Badge variant="outline" class="font-mono text-[11px]">tail 400</Badge>
+          <div class="flex items-center gap-2">
+            <div class="relative flex-1">
+              <Search class="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+              <input
+                v-model="logFilter"
+                placeholder="篩選日誌行…"
+                class="h-8 w-full rounded-md border border-input bg-background/40 pl-8 pr-2 text-xs"
+              />
+            </div>
+            <Button variant="ghost" size="sm" :disabled="!logs" title="下載完整日誌" @click="downloadLogs">
+              <Download class="size-3.5" />下載
+            </Button>
             <Button variant="ghost" size="sm" :disabled="loadingLogs" @click="loadLogs">
               <RefreshCw class="size-3.5" :class="loadingLogs && 'animate-spin'" />重新整理
             </Button>
           </div>
           <pre
-            v-if="logs"
+            v-if="filteredLogs"
             class="max-h-[60vh] overflow-auto rounded-lg border border-border/60 bg-black/40 p-3 font-mono text-xs leading-relaxed text-foreground/90"
-          >{{ logs }}</pre>
+          >{{ filteredLogs }}</pre>
           <p v-else class="rounded-lg border border-border/60 bg-background/40 p-4 text-sm text-muted-foreground">
-            {{ logsError ?? '無日誌內容。' }}
+            {{ logs ? '無符合篩選的日誌行。' : (logsError ?? '無日誌內容。') }}
           </p>
         </TabsContent>
       </Tabs>

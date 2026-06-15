@@ -96,6 +96,7 @@ export interface RequestRow {
   completion_tokens: number | null
   total_tokens: number | null
   error: string | null
+  api_key_name: string | null
 }
 
 export interface LogResponse {

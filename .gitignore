@@ -6,6 +6,9 @@
 .env
 **/.env
 !**/.env.example
+data
+a.md
+/.claude
 
 ### Linux ###
 *~

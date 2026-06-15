@@ -28,6 +28,12 @@ const router = createRouter({
       component: () => import('@/views/TrendsView.vue'),
     },
     {
+      path: '/requests',
+      name: 'requests',
+      meta: { title: 'Requests' },
+      component: () => import('@/views/RequestsView.vue'),
+    },
+    {
       path: '/playground',
       name: 'playground',
       meta: { title: 'Playground' },

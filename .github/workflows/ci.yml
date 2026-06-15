@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  python-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install test deps
+        # Minimal set: the apps' runtime requirements pull in vllm (GPU/huge),
+        # which the unit suites don't need — they fake the inference path.
+        run: |
+          python -m pip install --upgrade pip
+          pip install fastapi httpx pydantic pyyaml psutil aiosqlite huggingface_hub \
+                      uvloop pytest "pytest-asyncio>=0.23"
+      - name: Store tests
+        run: pytest -q packages/llmops-store
+      - name: Backend tests
+        working-directory: apps/backend
+        run: pytest -q
+      - name: Router tests
+        working-directory: apps/router-server
+        run: pytest -q
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/frontend_llmops
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: apps/frontend_llmops/package-lock.json
+      - run: npm ci
+      - name: Type-check
+        run: npm run type-check
+      - name: Unit tests
+        run: npm run test:unit
+      - name: Build
+        run: npm run build-only
