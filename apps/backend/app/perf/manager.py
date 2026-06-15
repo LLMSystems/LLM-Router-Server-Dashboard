@@ -64,19 +64,75 @@ class PerfManager:
             model_field = group  # router routes by group key
         return model_field, base, model_tag
 
-    def _build_cfg(self, req: dict, run_dir: str) -> dict:
+    def _resolve_embedding(self, name: str, mode: str, target: str):
+        """Resolve an embedding/rerank model to (model_field, base_url, tokenizer).
+
+        Both modes share the /v1/embeddings endpoint; the embedding server routes
+        by the model key (same field for router or direct). The tokenizer is the
+        model's HF id (evalscope's random_* dataset needs it to synthesize text).
+        """
+        emb = getattr(self.manager.config, "embedding_server", None)
+        field = "embedding_models" if mode == "embedding" else "reranking_models"
+        models = getattr(emb, field, {}) if emb else {}
+        entry = models.get(name)
+        if entry is None:
+            raise PerfError(f"unknown {mode} model: {name}")
+        tokenizer = getattr(entry, "model_name", None) or name
+        base = f"http://127.0.0.1:{emb.port}" if target == "instance" else self.router_url
+        return name, base, tokenizer
+
+    def _target(self, req: dict):
+        """(model_field, full_url, tokenizer) for any mode — LLM or embedding/rerank."""
+        mode = req.get("mode", "sweep")
         group = req["model"]
+        target = req.get("target", "router")
+        if mode in ("embedding", "rerank"):
+            model_field, base, tokenizer = self._resolve_embedding(group, mode, target)
+            return model_field, f"{base}/v1/embeddings", tokenizer
+        model_field, base, model_tag = self._resolve(group, target, req.get("instance_key"))
         path = "/v1/completions" if req.get("endpoint") == "completions" else "/v1/chat/completions"
-        model_field, base, model_tag = self._resolve(group, req.get("target", "router"), req.get("instance_key"))
+        return model_field, f"{base}{path}", model_tag
+
+    def _build_embedding_cfg(self, req: dict, run_dir: str, model_field: str, url: str, tokenizer: str) -> dict:
+        """Closed-loop concurrency sweep for embedding/rerank (non-streaming, no
+        output tokens). Uses evalscope's random_* dataset + our matching plugin."""
+        is_rerank = req.get("mode") == "rerank"
+        cfg: dict = {
+            "model": model_field,
+            "url": url,
+            "api": "llmops_rerank" if is_rerank else "openai_embedding",
+            "dataset": "random_rerank" if is_rerank else "random_embedding",
+            "tokenizer_path": tokenizer,
+            "stream": False,
+            "parallel": req["parallel"],
+            "number": req["number"],
+            "min_prompt_length": req.get("min_prompt_length", 64),
+            "max_prompt_length": req.get("max_prompt_length", 256),
+            "outputs_dir": run_dir,
+            "no_timestamp": True,
+            "name": "run",
+        }
+        if is_rerank:
+            cfg["extra_args"] = {"num_documents": req.get("rerank_documents", 10)}
+        if getattr(self.settings, "admin_token", ""):
+            cfg["api_key"] = self.settings.admin_token
+        return cfg
+
+    def _build_cfg(self, req: dict, run_dir: str) -> dict:
+        mode = req.get("mode", "sweep")
+        model_field, url, tokenizer = self._target(req)
+
+        if mode in ("embedding", "rerank"):
+            return self._build_embedding_cfg(req, run_dir, model_field, url, tokenizer)
 
         cfg: dict = {
             "model": model_field,
-            "url": f"{base}{path}",
+            "url": url,
             "api": "openai",
             "dataset": req.get("dataset", "random"),
             "max_tokens": req.get("max_tokens", 256),
             "stream": req.get("stream", True),
-            "tokenizer_path": model_tag,
+            "tokenizer_path": tokenizer,
             "outputs_dir": run_dir,
             "no_timestamp": True,
             "name": "run",
@@ -141,11 +197,10 @@ class PerfManager:
             raise PerfBusy("a benchmark is already running")
         group = req["model"]
         # Validate target/model up front so we fail fast (raises PerfError).
-        _, url, _ = self._resolve(group, req.get("target", "router"), req.get("instance_key"))
-        path = "/v1/completions" if req.get("endpoint") == "completions" else "/v1/chat/completions"
+        _, url, _ = self._target(req)
 
         run_id = await self.store.create_perf_run(
-            model=group, target_url=f"{url}{path}", params=json.dumps(req), name=req.get("name"),
+            model=group, target_url=url, params=json.dumps(req), name=req.get("name"),
         )
         run_dir = os.path.join(self.perf_root, str(run_id))
         os.makedirs(run_dir, exist_ok=True)

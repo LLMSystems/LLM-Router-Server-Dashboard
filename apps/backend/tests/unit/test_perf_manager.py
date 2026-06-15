@@ -16,7 +16,14 @@ def _manager(tmp_path):
         settings=SimpleNamespace(model_tag="Qwen/Qwen2.5-0.5B-Instruct"),
         instances=[SimpleNamespace(id="a", port=8006)],
     )
-    fake_mgr = SimpleNamespace(config=SimpleNamespace(LLM_engines={"Qwen2.5-0.5B": engine}))
+    emb = SimpleNamespace(
+        port=8005,
+        embedding_models={"m3e-base": SimpleNamespace(model_name="moka-ai/m3e-base")},
+        reranking_models={"bge-reranker": SimpleNamespace(model_name="BAAI/bge-reranker-large")},
+    )
+    fake_mgr = SimpleNamespace(
+        config=SimpleNamespace(LLM_engines={"Qwen2.5-0.5B": engine}, embedding_server=emb)
+    )
     settings = BackendSettings(admin_token="adm")
     return PerfManager(None, fake_mgr, settings, str(tmp_path), "http://127.0.0.1:8887")
 
@@ -70,6 +77,41 @@ def test_build_cfg_multiturn(tmp_path):
     assert cfg["dataset"] == "share_gpt_zh_multi_turn"
     assert cfg["max_turns"] == 3 and cfg["parallel"] == [4]
     assert "extra_args" not in cfg  # multi-turn dataset, not "random"
+
+
+def test_build_cfg_embedding(tmp_path):
+    pm = _manager(tmp_path)
+    cfg = pm._build_cfg(
+        {"model": "m3e-base", "mode": "embedding", "target": "router",
+         "parallel": [1, 4], "number": [20, 40], "min_prompt_length": 32, "max_prompt_length": 128},
+        str(tmp_path / "1"),
+    )
+    assert cfg["url"] == "http://127.0.0.1:8887/v1/embeddings"
+    assert cfg["api"] == "openai_embedding" and cfg["dataset"] == "random_embedding"
+    assert cfg["model"] == "m3e-base"  # embedding server routes by key
+    assert cfg["tokenizer_path"] == "moka-ai/m3e-base"
+    assert cfg["stream"] is False and cfg["parallel"] == [1, 4]
+    assert "max_tokens" not in cfg  # embeddings have no output tokens
+    assert cfg["api_key"] == "adm"
+
+
+def test_build_cfg_rerank(tmp_path):
+    pm = _manager(tmp_path)
+    cfg = pm._build_cfg(
+        {"model": "bge-reranker", "mode": "rerank", "target": "instance",
+         "parallel": [2], "number": [10], "rerank_documents": 20},
+        str(tmp_path / "1"),
+    )
+    assert cfg["url"] == "http://127.0.0.1:8005/v1/embeddings"  # direct to embedding server
+    assert cfg["api"] == "llmops_rerank" and cfg["dataset"] == "random_rerank"
+    assert cfg["tokenizer_path"] == "BAAI/bge-reranker-large"
+    assert cfg["extra_args"] == {"num_documents": 20}
+
+
+def test_resolve_unknown_embedding_model(tmp_path):
+    pm = _manager(tmp_path)
+    with pytest.raises(PerfError):
+        pm._target({"model": "nope", "mode": "embedding", "target": "router"})
 
 
 def test_resolve_unknown_group_and_instance(tmp_path):

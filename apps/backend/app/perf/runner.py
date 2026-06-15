@@ -36,6 +36,32 @@ def _norm_pct(p):
     return PercentileResult.from_transposed(p).model_dump()
 
 
+def _resolve_tokenizer(cfg: dict) -> None:
+    """Point an embedding/rerank tokenizer at its local HF-cache snapshot.
+
+    evalscope's load_tokenizer goes through ModelScope hub. LLM tags (Qwen…) exist
+    there, but embedding ids like 'moka-ai/m3e-base' don't (404). The embedding
+    server already pulled these from HF, so resolve the cached snapshot dir and
+    hand evalscope a local path (loaded directly, no hub lookup). Best-effort: on
+    any failure leave the id as-is so the original error still surfaces.
+    """
+    if cfg.get("api") not in ("openai_embedding", "llmops_rerank"):
+        return
+    tok = cfg.get("tokenizer_path")
+    if not tok or os.path.isdir(tok):
+        return
+    try:
+        from huggingface_hub import snapshot_download
+
+        cfg["tokenizer_path"] = snapshot_download(
+            tok, local_files_only=True,
+            allow_patterns=["*.json", "*.txt", "*.model", "tokenizer*", "vocab*", "merges*", "special_tokens*"],
+        )
+        print(f"[runner] resolved tokenizer '{tok}' -> {cfg['tokenizer_path']}", flush=True)
+    except Exception as e:  # not in cache / hub unreachable — let evalscope try the id
+        print(f"[runner] tokenizer cache resolve failed for '{tok}': {e}", flush=True)
+
+
 def _val_from_key(key: str):
     try:
         return int(key.rsplit("_", 1)[1])
@@ -96,6 +122,10 @@ def main() -> int:
     from evalscope.perf.arguments import Arguments
     from evalscope.perf.main import run_perf_benchmark
 
+    # Importing registers our custom rerank api ('llmops_rerank') with evalscope.
+    import app.perf.rerank_plugin  # noqa: F401
+
+    _resolve_tokenizer(cfg)
     results = run_perf_benchmark(Arguments(**cfg))
 
     points = {

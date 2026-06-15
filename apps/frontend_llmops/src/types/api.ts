@@ -289,7 +289,7 @@ export interface PerfRun {
 export interface PerfRequest {
   model: string
   name?: string
-  mode: 'sweep' | 'openloop' | 'multiturn' | 'sla'
+  mode: 'sweep' | 'openloop' | 'multiturn' | 'sla' | 'embedding' | 'rerank'
   target: 'router' | 'instance'
   instance_key?: string
   dataset: 'random' | 'openqa'
@@ -316,6 +316,8 @@ export interface PerfRequest {
   sla_upper_bound?: number
   sla_num_runs?: number
   sla_fixed_parallel?: number
+  // embedding / rerank
+  rerank_documents?: number
 }
 
 export type SettingValue = string | number | boolean | null

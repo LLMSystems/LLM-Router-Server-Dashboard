@@ -12,6 +12,8 @@ import Button from '@/components/ui/Button.vue'
 import Input from '@/components/ui/Input.vue'
 import Badge from '@/components/ui/Badge.vue'
 import PerfSweepChart from '@/components/PerfSweepChart.vue'
+import PerfCompareChart from '@/components/PerfCompareChart.vue'
+import type { CompareSeries } from '@/components/PerfCompareChart.vue'
 
 const models = useModelsStore()
 const { ensureUnlocked } = useAuth()
@@ -27,13 +29,30 @@ const target = ref<'router' | 'instance'>('router')
 const instanceKey = ref('')
 const dataset = ref<'random' | 'openqa'>('random')
 const endpoint = ref<'chat' | 'completions'>('chat')
-const mode = ref<'sweep' | 'openloop' | 'multiturn' | 'sla'>('sweep')
+const mode = ref<'sweep' | 'openloop' | 'multiturn' | 'sla' | 'embedding' | 'rerank'>('sweep')
 const MODES = [
   { v: 'sweep', label: '並發 Sweep' },
   { v: 'openloop', label: '速率 Open-loop' },
   { v: 'multiturn', label: '多輪對話' },
   { v: 'sla', label: 'SLA 調優' },
+  { v: 'embedding', label: '嵌入 Embedding' },
+  { v: 'rerank', label: '重排序 Rerank' },
 ] as const
+const isEmbedMode = computed(() => mode.value === 'embedding' || mode.value === 'rerank')
+// Embedding/rerank server + served-model picker (mirrors the Playground logic).
+const embeddingServerReady = computed(() => models.byKey.get('embedding::default')?.state === 'ready')
+const embModels = computed(() => {
+  const e = models.config?.embedding_server
+  if (!e) return [] as string[]
+  return Object.keys(mode.value === 'rerank' ? (e.reranking_models ?? {}) : (e.embedding_models ?? {}))
+})
+const embModel = ref('')
+const rerankDocs = ref(10)
+const embPromptLen = ref(256)
+watch([embModels, isEmbedMode], () => {
+  if (isEmbedMode.value && (!embModel.value || !embModels.value.includes(embModel.value)))
+    embModel.value = embModels.value[0] ?? ''
+}, { immediate: true })
 const parallelInput = ref('1,4,8,16')
 const rateInput = ref('5,10,20')
 const reqPerPoint = ref(50)
@@ -151,7 +170,9 @@ async function loadLog() {
 }
 
 async function launch() {
-  if (!model.value || launching.value) return
+  if (launching.value) return
+  if (isEmbedMode.value) return launchEmbedding()
+  if (!model.value) return
   const common = {
     model: model.value,
     name: name.value || undefined,
@@ -216,6 +237,37 @@ async function launch() {
       warmup_num: warmup.value || undefined,
     }
   }
+  await submit(req)
+}
+
+async function launchEmbedding() {
+  if (!embModel.value) {
+    toast.error('請選擇一個模型')
+    return
+  }
+  if (!parallel.value.length) {
+    toast.error('請輸入至少一個並發數')
+    return
+  }
+  const req: PerfRequest = {
+    model: embModel.value,
+    name: name.value || undefined,
+    mode: mode.value as 'embedding' | 'rerank',
+    target: target.value,
+    dataset: 'random',
+    endpoint: 'chat',
+    max_tokens: 16, // ignored for embedding/rerank; kept valid for the schema
+    min_prompt_length: embPromptLen.value,
+    max_prompt_length: embPromptLen.value,
+    stream: false,
+    parallel: parallel.value,
+    number: parallel.value.map(() => reqPerPoint.value),
+    rerank_documents: mode.value === 'rerank' ? rerankDocs.value : undefined,
+  }
+  await submit(req)
+}
+
+async function submit(req: PerfRequest) {
   if (!(await ensureUnlocked())) return
   launching.value = true
   try {
@@ -229,6 +281,45 @@ async function launch() {
     launching.value = false
   }
 }
+
+// ---- run comparison ----
+const COMPARE_COLORS = ['var(--chart-1)', 'var(--chart-2)', 'var(--chart-4)', 'var(--chart-5)', 'var(--chart-3)']
+const compareIds = ref<number[]>([])
+const compareData = ref<Record<number, { run: PerfRun; points: PerfPoint[] }>>({})
+
+async function toggleCompare(id: number) {
+  const i = compareIds.value.indexOf(id)
+  if (i >= 0) {
+    compareIds.value.splice(i, 1)
+    return
+  }
+  if (compareIds.value.length >= COMPARE_COLORS.length) {
+    toast.error(`最多比較 ${COMPARE_COLORS.length} 筆`)
+    return
+  }
+  compareIds.value.push(id)
+  if (!compareData.value[id]) {
+    try {
+      const run = await api.getPerf(id)
+      compareData.value[id] = { run, points: parseResult(run.result).points }
+    } catch {
+      compareIds.value.splice(compareIds.value.indexOf(id), 1)
+      toast.error('無法載入比較資料')
+    }
+  }
+}
+const compareSeries = computed<CompareSeries[]>(() =>
+  compareIds.value
+    .map((id, i) => {
+      const d = compareData.value[id]
+      if (!d) return null
+      return { label: d.run.name || `#${d.run.id}`, color: COMPARE_COLORS[i % COMPARE_COLORS.length]!, points: d.points }
+    })
+    .filter((s): s is CompareSeries => s != null),
+)
+const compareXLabel = computed(() =>
+  compareIds.value.some((id) => compareData.value[id]?.run.params?.includes('"openloop"')) ? '速率' : '並發',
+)
 
 async function cancel(id: number) {
   try {
@@ -245,6 +336,9 @@ async function remove(id: number) {
   try {
     await api.deletePerf(id)
     if (selectedId.value === id) { selectedId.value = null; selected.value = null; points.value = [] }
+    const ci = compareIds.value.indexOf(id)
+    if (ci >= 0) compareIds.value.splice(ci, 1)
+    delete compareData.value[id]
     await loadRuns()
   } catch (e) {
     toast.error('刪除失敗', { description: String(e) })
@@ -285,6 +379,14 @@ const aggregates = computed(() => {
   return { duration: dur, generated: gen, rate: dur ? gen / dur : 0 }
 })
 const isOpenLoop = computed(() => parsedParams.value.mode === 'openloop')
+const isEmbedResult = computed(() => parsedParams.value.mode === 'embedding' || parsedParams.value.mode === 'rerank')
+const runModeLabel = computed(() => {
+  if (sla.value) return `SLA（${parsedParams.value.sla_variable ?? 'parallel'}）`
+  return ({
+    embedding: '嵌入 Embedding', rerank: '重排序 Rerank',
+    openloop: '速率 Open-loop', multiturn: '多輪對話',
+  } as Record<string, string>)[parsedParams.value.mode as string] ?? '並發 Sweep'
+})
 const mtPoint = computed(() => points.value.find((p) => p.turns != null) ?? null)
 const expanded = ref<string | null>(null)
 function toggle(label: string) {
@@ -308,11 +410,19 @@ const statusColor: Record<string, string> = {
     <Card class="h-fit p-5">
       <p class="mb-4 flex items-center gap-2 text-sm font-semibold"><Gauge class="size-4" />壓測設定</p>
       <div class="space-y-3 text-sm">
-        <label class="block">
+        <label v-if="!isEmbedMode" class="block">
           <span class="text-xs text-muted-foreground">模型</span>
           <select v-model="model" class="mt-1 h-9 w-full rounded-md border border-input bg-background/40 px-2 text-sm">
             <option v-for="g in groups" :key="g" :value="g">{{ g }}{{ groupReady(g) ? '' : '（未啟動）' }}</option>
           </select>
+        </label>
+        <label v-else class="block">
+          <span class="text-xs text-muted-foreground">{{ mode === 'rerank' ? '重排序模型' : '嵌入模型' }}</span>
+          <select v-model="embModel" class="mt-1 h-9 w-full rounded-md border border-input bg-background/40 px-2 text-sm">
+            <option v-for="m in embModels" :key="m" :value="m">{{ m }}</option>
+          </select>
+          <p v-if="!embeddingServerReady" class="mt-1 text-[11px] text-status-failed">embedding server 未啟動，請先至「模型」頁啟動。</p>
+          <p v-else-if="!embModels.length" class="mt-1 text-[11px] text-muted-foreground">此模式無可用模型。</p>
         </label>
         <div class="grid grid-cols-2 gap-1 rounded-lg border border-border/60 bg-muted/40 p-0.5">
           <button
@@ -332,14 +442,14 @@ const statusColor: Record<string, string> = {
             <option value="instance">單一實例</option>
           </select>
         </label>
-        <label v-if="target === 'instance'" class="block">
+        <label v-if="target === 'instance' && !isEmbedMode" class="block">
           <span class="text-xs text-muted-foreground">實例</span>
           <select v-model="instanceKey" class="mt-1 h-9 w-full rounded-md border border-input bg-background/40 px-2 text-sm">
             <option v-for="k in instanceOptions" :key="k" :value="k">{{ k.split('::')[1] }}</option>
           </select>
         </label>
-        <!-- Multi-turn uses its own dataset (below) and is always chat. -->
-        <div v-if="mode !== 'multiturn'" class="grid grid-cols-2 gap-2">
+        <!-- Multi-turn / embedding use their own dataset and are not chat/completions. -->
+        <div v-if="mode !== 'multiturn' && !isEmbedMode" class="grid grid-cols-2 gap-2">
           <label class="block">
             <span class="text-xs text-muted-foreground">資料集</span>
             <select v-model="dataset" class="mt-1 h-9 w-full rounded-md border border-input bg-background/40 px-2 text-sm">
@@ -468,8 +578,30 @@ const statusColor: Record<string, string> = {
           </div>
         </template>
 
-        <!-- Common knobs -->
-        <div class="grid grid-cols-2 gap-2">
+        <!-- Embedding / rerank: closed-loop concurrency sweep, no output tokens -->
+        <template v-else-if="isEmbedMode">
+          <label class="block">
+            <span class="text-xs text-muted-foreground">並發點（逗號分隔，掃描）</span>
+            <Input v-model="parallelInput" placeholder="1,4,8,16" class="mt-1 font-mono" />
+          </label>
+          <div class="grid grid-cols-2 gap-2">
+            <label class="block">
+              <span class="text-xs text-muted-foreground">每點請求數</span>
+              <Input v-model.number="reqPerPoint" type="number" min="1" class="mt-1" />
+            </label>
+            <label class="block">
+              <span class="text-xs text-muted-foreground">輸入長度（token）</span>
+              <Input v-model.number="embPromptLen" type="number" min="1" class="mt-1" />
+            </label>
+          </div>
+          <label v-if="mode === 'rerank'" class="block">
+            <span class="text-xs text-muted-foreground">每筆文件數</span>
+            <Input v-model.number="rerankDocs" type="number" min="1" class="mt-1" />
+          </label>
+        </template>
+
+        <!-- Common knobs (LLM modes only — embedding has no output tokens/stream) -->
+        <div v-if="!isEmbedMode" class="grid grid-cols-2 gap-2">
           <label class="block">
             <span class="text-xs text-muted-foreground">輸出 tokens</span>
             <Input v-model.number="maxTokens" type="number" min="1" class="mt-1" />
@@ -483,12 +615,12 @@ const statusColor: Record<string, string> = {
           <span class="text-xs text-muted-foreground">名稱（選填）</span>
           <Input v-model="name" placeholder="例如：q05b-baseline" class="mt-1" />
         </label>
-        <label class="flex items-center justify-between">
+        <label v-if="!isEmbedMode" class="flex items-center justify-between">
           <span class="text-xs text-muted-foreground">串流（量 TTFT 必須）</span>
           <input v-model="stream" type="checkbox" class="size-4 accent-[var(--chart-1)]" />
         </label>
 
-        <Button class="w-full" :disabled="launching || busy || !model" @click="launch">
+        <Button class="w-full" :disabled="launching || busy || (isEmbedMode ? !embModel : !model)" @click="launch">
           <Loader2 v-if="launching" class="size-4 animate-spin" /><Play v-else class="size-4" />
           {{ busy ? '有壓測進行中…' : '開始壓測' }}
         </Button>
@@ -499,7 +631,10 @@ const statusColor: Record<string, string> = {
     <div class="space-y-4">
       <!-- History -->
       <Card class="overflow-hidden">
-        <div class="border-b border-border/60 px-4 py-2.5 text-sm font-semibold">壓測歷史</div>
+        <div class="flex items-center justify-between border-b border-border/60 px-4 py-2.5 text-sm font-semibold">
+          <span>壓測歷史</span>
+          <span class="text-xs font-normal text-muted-foreground">勾選 ≥2 筆比較</span>
+        </div>
         <div v-if="runs.length" class="divide-y divide-border/60">
           <div
             v-for="r in runs"
@@ -508,6 +643,15 @@ const statusColor: Record<string, string> = {
             :class="selectedId === r.id ? 'bg-accent/40' : ''"
             @click="select(r.id)"
           >
+            <input
+              v-if="r.status === 'completed'"
+              type="checkbox"
+              :checked="compareIds.includes(r.id)"
+              class="size-4 shrink-0 accent-[var(--chart-1)]"
+              title="加入比較"
+              @click.stop="toggleCompare(r.id)"
+            />
+            <span v-else class="size-4 shrink-0" />
             <Loader2 v-if="r.status === 'running'" class="size-3.5 shrink-0 animate-spin text-status-starting" />
             <span v-else class="size-2 shrink-0 rounded-full" :class="r.status === 'completed' ? 'bg-status-ready' : r.status === 'failed' ? 'bg-status-failed' : 'bg-muted'" />
             <div class="min-w-0 flex-1">
@@ -520,6 +664,21 @@ const statusColor: Record<string, string> = {
           </div>
         </div>
         <p v-else class="px-4 py-8 text-center text-sm text-muted-foreground">尚無壓測紀錄。</p>
+      </Card>
+
+      <!-- Comparison (≥2 completed runs selected) -->
+      <Card v-if="compareSeries.length >= 2" class="p-4">
+        <div class="mb-3 flex flex-wrap items-center gap-x-4 gap-y-1">
+          <p class="text-sm font-semibold">壓測比較</p>
+          <span v-for="(s, i) in compareSeries" :key="i" class="flex items-center gap-1.5 text-xs">
+            <span class="size-2.5 rounded-full" :style="{ background: s.color }" />{{ s.label }}
+          </span>
+        </div>
+        <div class="grid gap-4 lg:grid-cols-3">
+          <PerfCompareChart :series="compareSeries" :metric="(p: PerfPoint) => p.rps" label="RPS（req/s）" :format="(v) => v.toFixed(1)" :x-label="compareXLabel" />
+          <PerfCompareChart :series="compareSeries" :metric="(p: PerfPoint) => p.avg_latency != null ? p.avg_latency * 1000 : null" label="平均延遲（ms）" :format="(v) => `${Math.round(v)}`" :x-label="compareXLabel" />
+          <PerfCompareChart :series="compareSeries" :metric="(p: PerfPoint) => p.output_tps" label="輸出吞吐 Gen/s（tok/s）" :format="(v) => formatNumber(Math.round(v))" :x-label="compareXLabel" />
+        </div>
       </Card>
 
       <!-- Selected detail -->
@@ -537,7 +696,7 @@ const statusColor: Record<string, string> = {
               <div><span class="text-muted-foreground">目標</span> <span class="font-mono">{{ selected.target_url.replace(/^https?:\/\//, '') }}</span></div>
               <div>
                 <span class="text-muted-foreground">模式</span>
-                {{ sla ? `SLA（${parsedParams.sla_variable ?? 'parallel'}）` : '並發 Sweep' }}
+                {{ runModeLabel }}
               </div>
               <div><span class="text-muted-foreground">輸出 tokens</span> {{ parsedParams.max_tokens ?? '—' }}</div>
               <div><span class="text-muted-foreground">總測試時間</span> <span class="tabular">{{ aggregates.duration.toFixed(1) }}s</span></div>
@@ -606,8 +765,14 @@ const statusColor: Record<string, string> = {
         <!-- Charts: throughput + decode + tail latency (need ≥2 points for a curve) -->
         <div v-if="points.length > 1" class="grid gap-4 lg:grid-cols-3">
           <Card class="p-4"><PerfSweepChart :points="points" :metric="(p: PerfPoint) => p.rps" label="RPS（req/s）" color="var(--chart-1)" :format="(v) => v.toFixed(1)" :x-label="isOpenLoop ? '速率' : '並發'" /></Card>
-          <Card class="p-4"><PerfSweepChart :points="points" :metric="(p: PerfPoint) => p.output_tps" label="輸出吞吐 Gen/s（tok/s）" color="var(--chart-2)" :format="(v) => formatNumber(Math.round(v))" :x-label="isOpenLoop ? '速率' : '並發'" /></Card>
-          <Card class="p-4"><PerfSweepChart :points="points" :metric="(p: PerfPoint) => p.ttft_p99 ?? p.avg_ttft" label="TTFT p99（ms）" color="var(--chart-4)" :format="(v) => `${Math.round(v)}`" :x-label="isOpenLoop ? '速率' : '並發'" /></Card>
+          <template v-if="isEmbedResult">
+            <Card class="p-4"><PerfSweepChart :points="points" :metric="(p: PerfPoint) => p.avg_latency != null ? p.avg_latency * 1000 : null" label="平均延遲（ms）" color="var(--chart-2)" :format="(v) => `${Math.round(v)}`" :x-label="'並發'" /></Card>
+            <Card class="p-4"><PerfSweepChart :points="points" :metric="(p: PerfPoint) => p.latency_p99 != null ? p.latency_p99 * 1000 : null" label="延遲 p99（ms）" color="var(--chart-4)" :format="(v) => `${Math.round(v)}`" :x-label="'並發'" /></Card>
+          </template>
+          <template v-else>
+            <Card class="p-4"><PerfSweepChart :points="points" :metric="(p: PerfPoint) => p.output_tps" label="輸出吞吐 Gen/s（tok/s）" color="var(--chart-2)" :format="(v) => formatNumber(Math.round(v))" :x-label="isOpenLoop ? '速率' : '並發'" /></Card>
+            <Card class="p-4"><PerfSweepChart :points="points" :metric="(p: PerfPoint) => p.ttft_p99 ?? p.avg_ttft" label="TTFT p99（ms）" color="var(--chart-4)" :format="(v) => `${Math.round(v)}`" :x-label="isOpenLoop ? '速率' : '並發'" /></Card>
+          </template>
         </div>
 
         <!-- Table (click a row for avg/p50/p99/max detail) -->

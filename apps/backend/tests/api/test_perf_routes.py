@@ -35,6 +35,11 @@ def test_start_multiturn_custom_requires_path(client):
     assert resp.status_code == 400
 
 
+def test_start_embedding_requires_parallel(client):
+    resp = client.post("/api/perf", json={"model": "m3e-base", "mode": "embedding"})
+    assert resp.status_code == 400
+
+
 def test_start_unknown_model_is_400(client):
     resp = client.post("/api/perf", json={
         "model": "nope", "parallel": [1], "number": [10],

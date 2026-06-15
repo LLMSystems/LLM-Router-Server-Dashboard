@@ -25,7 +25,7 @@ def _store(request: Request):
 class PerfRequest(BaseModel):
     model: str  # model group
     name: Optional[str] = None
-    mode: Literal["sweep", "openloop", "multiturn", "sla"] = "sweep"
+    mode: Literal["sweep", "openloop", "multiturn", "sla", "embedding", "rerank"] = "sweep"
     target: Literal["router", "instance"] = "router"
     instance_key: Optional[str] = None
     dataset: Literal["random", "openqa"] = "random"
@@ -54,6 +54,8 @@ class PerfRequest(BaseModel):
     sla_upper_bound: int = Field(default=64, ge=1)
     sla_num_runs: int = Field(default=1, ge=1)
     sla_fixed_parallel: Optional[int] = Field(default=None, ge=1)
+    # embedding / rerank mode (concurrency sweep, shares parallel/number)
+    rerank_documents: int = Field(default=10, ge=1)
 
 
 @router.get("")
@@ -76,6 +78,11 @@ async def start_run(body: PerfRequest, request: Request):
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "parallel and number are required in multi-turn mode")
         if body.mt_dataset == "custom_multi_turn" and not body.mt_dataset_path:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "mt_dataset_path is required for custom_multi_turn")
+    elif body.mode in ("embedding", "rerank"):
+        if not body.parallel or not body.number:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, f"parallel and number are required in {body.mode} mode")
+        if len(body.parallel) != len(body.number):
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "parallel and number must be the same length")
     else:  # sweep
         if not body.parallel or not body.number:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "parallel and number are required in sweep mode")
