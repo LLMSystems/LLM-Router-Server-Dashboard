@@ -29,12 +29,13 @@ const target = ref<'router' | 'instance'>('router')
 const instanceKey = ref('')
 const dataset = ref<'random' | 'openqa'>('random')
 const endpoint = ref<'chat' | 'completions'>('chat')
-const mode = ref<'sweep' | 'openloop' | 'multiturn' | 'sla' | 'embedding' | 'rerank'>('sweep')
+const mode = ref<'sweep' | 'openloop' | 'multiturn' | 'sla' | 'embedding' | 'rerank' | 'speed'>('sweep')
 const MODES = [
   { v: 'sweep', label: '並發 Sweep' },
   { v: 'openloop', label: '速率 Open-loop' },
   { v: 'multiturn', label: '多輪對話' },
   { v: 'sla', label: 'SLA 調優' },
+  { v: 'speed', label: '速度基準' },
   { v: 'embedding', label: '嵌入 Embedding' },
   { v: 'rerank', label: '重排序 Rerank' },
 ] as const
@@ -68,6 +69,9 @@ const mtConcurrent = computed(() =>
 )
 const maxTokens = ref(256)
 const promptLen = ref(512)
+const prefixLen = ref(0)
+const durationSec = ref(0)
+const speedLong = ref(false)
 const warmup = ref(0.1)
 const stream = ref(true)
 const launching = ref(false)
@@ -172,6 +176,7 @@ async function loadLog() {
 async function launch() {
   if (launching.value) return
   if (isEmbedMode.value) return launchEmbedding()
+  if (mode.value === 'speed') return launchSpeed()
   if (!model.value) return
   const common = {
     model: model.value,
@@ -184,6 +189,7 @@ async function launch() {
     max_tokens: maxTokens.value,
     min_prompt_length: promptLen.value,
     max_prompt_length: promptLen.value,
+    prefix_length: prefixLen.value || undefined,
     stream: stream.value,
   }
   let req: PerfRequest
@@ -209,7 +215,7 @@ async function launch() {
       toast.error('請輸入至少一個速率')
       return
     }
-    req = { ...common, rate: rates.value, number: rates.value.map(() => reqPerPoint.value) }
+    req = { ...common, rate: rates.value, number: rates.value.map(() => reqPerPoint.value), duration: durationSec.value || undefined }
   } else if (mode.value === 'multiturn') {
     if (!mtConcurrent.value.length) {
       toast.error('請輸入至少一個並發對話數')
@@ -224,6 +230,7 @@ async function launch() {
       mt_dataset_path: mtDataset.value === 'custom_multi_turn' ? mtDatasetPath.value : undefined,
       min_turns: minTurns.value,
       max_turns: maxTurns.value,
+      duration: durationSec.value || undefined,
     }
   } else {
     if (!parallel.value.length) {
@@ -263,6 +270,28 @@ async function launchEmbedding() {
     parallel: parallel.value,
     number: parallel.value.map(() => reqPerPoint.value),
     rerank_documents: mode.value === 'rerank' ? rerankDocs.value : undefined,
+  }
+  await submit(req)
+}
+
+async function launchSpeed() {
+  if (!model.value) {
+    toast.error('請選擇一個模型')
+    return
+  }
+  const req: PerfRequest = {
+    model: model.value,
+    name: name.value || undefined,
+    mode: 'speed',
+    target: target.value,
+    instance_key: target.value === 'instance' ? instanceKey.value : undefined,
+    dataset: 'random',
+    endpoint: 'completions', // speed benchmark must hit /v1/completions
+    max_tokens: maxTokens.value,
+    min_prompt_length: promptLen.value,
+    max_prompt_length: promptLen.value,
+    stream: true,
+    speed_long: speedLong.value,
   }
   await submit(req)
 }
@@ -384,7 +413,7 @@ const runModeLabel = computed(() => {
   if (sla.value) return `SLA（${parsedParams.value.sla_variable ?? 'parallel'}）`
   return ({
     embedding: '嵌入 Embedding', rerank: '重排序 Rerank',
-    openloop: '速率 Open-loop', multiturn: '多輪對話',
+    openloop: '速率 Open-loop', multiturn: '多輪對話', speed: '速度基準',
   } as Record<string, string>)[parsedParams.value.mode as string] ?? '並發 Sweep'
 })
 const mtPoint = computed(() => points.value.find((p) => p.turns != null) ?? null)
@@ -448,8 +477,8 @@ const statusColor: Record<string, string> = {
             <option v-for="k in instanceOptions" :key="k" :value="k">{{ k.split('::')[1] }}</option>
           </select>
         </label>
-        <!-- Multi-turn / embedding use their own dataset and are not chat/completions. -->
-        <div v-if="mode !== 'multiturn' && !isEmbedMode" class="grid grid-cols-2 gap-2">
+        <!-- Multi-turn / embedding / speed use their own dataset + endpoint. -->
+        <div v-if="mode !== 'multiturn' && mode !== 'speed' && !isEmbedMode" class="grid grid-cols-2 gap-2">
           <label class="block">
             <span class="text-xs text-muted-foreground">資料集</span>
             <select v-model="dataset" class="mt-1 h-9 w-full rounded-md border border-input bg-background/40 px-2 text-sm">
@@ -489,10 +518,16 @@ const statusColor: Record<string, string> = {
             <span class="text-xs text-muted-foreground">速率（req/s，逗號分隔，掃描）</span>
             <Input v-model="rateInput" placeholder="5,10,20" class="mt-1 font-mono" />
           </label>
-          <label class="block">
-            <span class="text-xs text-muted-foreground">每速率請求數</span>
-            <Input v-model.number="reqPerPoint" type="number" min="1" class="mt-1" />
-          </label>
+          <div class="grid grid-cols-2 gap-2">
+            <label class="block">
+              <span class="text-xs text-muted-foreground">每速率請求數</span>
+              <Input v-model.number="reqPerPoint" type="number" min="1" class="mt-1" />
+            </label>
+            <label class="block">
+              <span class="text-xs text-muted-foreground">最長秒數（0=不限）</span>
+              <Input v-model.number="durationSec" type="number" min="0" class="mt-1" />
+            </label>
+          </div>
         </template>
 
         <!-- Multi-turn conversations -->
@@ -529,6 +564,10 @@ const statusColor: Record<string, string> = {
               <Input v-model.number="maxTurns" type="number" min="1" class="mt-1" />
             </label>
           </div>
+          <label class="block">
+            <span class="text-xs text-muted-foreground">最長秒數（0=不限，避免牆鐘失控）</span>
+            <Input v-model.number="durationSec" type="number" min="0" class="mt-1" />
+          </label>
         </template>
 
         <!-- SLA-specific (conditions OR-ed; each runs its own binary search) -->
@@ -578,6 +617,18 @@ const statusColor: Record<string, string> = {
           </div>
         </template>
 
+        <!-- Speed baseline: single request, fixed prompt lengths, /v1/completions -->
+        <template v-else-if="mode === 'speed'">
+          <div class="rounded-lg border border-border/60 bg-muted/30 p-2.5 text-[11px] leading-relaxed text-muted-foreground">
+            單請求標準速度（並發 1）。固定 prompt 長度{{ speedLong ? ' 63k / 129k' : ' 1 / 6k / 14k / 30k' }}，
+            打 <span class="font-mono">/v1/completions</span> 避免 chat template 干擾。
+          </div>
+          <label class="flex items-center justify-between">
+            <span class="text-xs text-muted-foreground">長上下文（63k / 129k）</span>
+            <input v-model="speedLong" type="checkbox" class="size-4 accent-[var(--chart-1)]" />
+          </label>
+        </template>
+
         <!-- Embedding / rerank: closed-loop concurrency sweep, no output tokens -->
         <template v-else-if="isEmbedMode">
           <label class="block">
@@ -603,12 +654,16 @@ const statusColor: Record<string, string> = {
         <!-- Common knobs (LLM modes only — embedding has no output tokens/stream) -->
         <div v-if="!isEmbedMode" class="grid grid-cols-2 gap-2">
           <label class="block">
-            <span class="text-xs text-muted-foreground">輸出 tokens</span>
+            <span class="text-xs text-muted-foreground">輸出 tokens{{ mode === 'speed' ? '（固定）' : '' }}</span>
             <Input v-model.number="maxTokens" type="number" min="1" class="mt-1" />
           </label>
-          <label v-if="dataset === 'random'" class="block">
+          <label v-if="dataset === 'random' && ['sweep', 'openloop', 'sla'].includes(mode)" class="block">
             <span class="text-xs text-muted-foreground">輸入長度</span>
             <Input v-model.number="promptLen" type="number" min="1" class="mt-1" />
+          </label>
+          <label v-if="dataset === 'random' && ['sweep', 'openloop', 'sla'].includes(mode)" class="block">
+            <span class="text-xs text-muted-foreground">前綴長度（prefix cache）</span>
+            <Input v-model.number="prefixLen" type="number" min="0" class="mt-1" />
           </label>
         </div>
         <label class="block">

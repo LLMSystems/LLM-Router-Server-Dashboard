@@ -54,6 +54,47 @@ def test_build_cfg_instance_target_uses_port_and_tag(tmp_path):
     assert "extra_args" not in cfg  # openqa: no random-specific knobs
 
 
+def test_build_cfg_prefix_length(tmp_path):
+    pm = _manager(tmp_path)
+    cfg = pm._build_cfg(
+        {"model": "Qwen2.5-0.5B", "target": "router", "dataset": "random",
+         "parallel": [4], "number": [10], "max_tokens": 128, "prefix_length": 256},
+        str(tmp_path / "1"),
+    )
+    assert cfg["prefix_length"] == 256
+
+
+def test_build_cfg_speed(tmp_path):
+    pm = _manager(tmp_path)
+    cfg = pm._build_cfg(
+        {"model": "Qwen2.5-0.5B", "mode": "speed", "target": "router", "max_tokens": 2048},
+        str(tmp_path / "1"),
+    )
+    assert cfg["dataset"] == "speed_benchmark"
+    assert cfg["url"].endswith("/v1/completions")  # not chat
+    assert cfg["parallel"] == 1 and cfg["number"] == 8
+    assert cfg["min_tokens"] == 2048 and cfg["max_tokens"] == 2048
+
+
+def test_build_cfg_speed_long(tmp_path):
+    pm = _manager(tmp_path)
+    cfg = pm._build_cfg(
+        {"model": "Qwen2.5-0.5B", "mode": "speed", "speed_long": True},
+        str(tmp_path / "1"),
+    )
+    assert cfg["dataset"] == "speed_benchmark_long" and cfg["number"] == 4
+
+
+def test_build_cfg_multiturn_duration(tmp_path):
+    pm = _manager(tmp_path)
+    cfg = pm._build_cfg(
+        {"model": "Qwen2.5-0.5B", "mode": "multiturn", "mt_dataset": "random_multi_turn",
+         "parallel": [4], "number": [20], "duration": 300, "max_tokens": 64},
+        str(tmp_path / "1"),
+    )
+    assert cfg["duration"] == 300
+
+
 def test_build_cfg_openloop(tmp_path):
     pm = _manager(tmp_path)
     cfg = pm._build_cfg(

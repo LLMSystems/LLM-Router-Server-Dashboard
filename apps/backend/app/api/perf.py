@@ -25,7 +25,7 @@ def _store(request: Request):
 class PerfRequest(BaseModel):
     model: str  # model group
     name: Optional[str] = None
-    mode: Literal["sweep", "openloop", "multiturn", "sla", "embedding", "rerank"] = "sweep"
+    mode: Literal["sweep", "openloop", "multiturn", "sla", "embedding", "rerank", "speed"] = "sweep"
     target: Literal["router", "instance"] = "router"
     instance_key: Optional[str] = None
     dataset: Literal["random", "openqa"] = "random"
@@ -33,6 +33,9 @@ class PerfRequest(BaseModel):
     max_tokens: int = Field(default=256, ge=1)
     min_prompt_length: int = Field(default=512, ge=1)
     max_prompt_length: int = Field(default=512, ge=1)
+    prefix_length: int = Field(default=0, ge=0)  # shared prefix per point (prefix-cache observation)
+    duration: Optional[int] = Field(default=None, ge=1)  # soft time limit (multi-turn / open-loop)
+    speed_long: bool = False  # speed mode: use speed_benchmark_long (63k/129k prompts)
     stream: bool = True
     # sweep / multiturn (parallel) — and number is shared by all closed-loop modes
     parallel: Optional[list[int]] = None
@@ -83,6 +86,8 @@ async def start_run(body: PerfRequest, request: Request):
             raise HTTPException(status.HTTP_400_BAD_REQUEST, f"parallel and number are required in {body.mode} mode")
         if len(body.parallel) != len(body.number):
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "parallel and number must be the same length")
+    elif body.mode == "speed":
+        pass  # parallel/number are fixed by the speed_benchmark dataset
     else:  # sweep
         if not body.parallel or not body.number:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "parallel and number are required in sweep mode")

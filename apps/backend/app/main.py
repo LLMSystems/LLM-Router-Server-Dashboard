@@ -18,6 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import auth as auth_routes
 from app.api import config as config_routes
+from app.api import datasets as dataset_routes
 from app.api import downloads as download_routes
 from app.api import embedding as embedding_routes
 from app.api import models as model_routes
@@ -33,6 +34,7 @@ from app.llmops.manager import ModelManager, build_registry
 from app.llmops.reconciler import adopt_running, reconcile_loop
 from app.llmops.state import ModelState
 from app.perf.manager import PerfManager
+from app.services.dataset_downloads import DatasetDownloadManager
 from app.services.downloads import DownloadManager
 from app.services.gpu_service import get_gpu_processes_with_info
 from app.services.overlay import build_merged_config, overlay_path
@@ -86,6 +88,7 @@ async def lifespan(app: FastAPI):
     app.state.manager = manager
     app.state.gpu_processes = []
     app.state.download_manager = DownloadManager()
+    app.state.dataset_download_manager = DatasetDownloadManager()
     perf_root = os.path.join(os.path.dirname(store.db_path), "perf")
     router_url = os.environ.get("LLMOPS_ROUTER_URL", "http://127.0.0.1:8887")
     app.state.perf_manager = PerfManager(store, manager, settings, perf_root, router_url)
@@ -140,6 +143,7 @@ def create_app() -> FastAPI:
     app.include_router(observability_routes.router, prefix="/api")
     app.include_router(auth_routes.router, prefix="/api")
     app.include_router(download_routes.router, prefix="/api")
+    app.include_router(dataset_routes.router, prefix="/api")
     app.include_router(embedding_routes.router, prefix="/api")
     app.include_router(perf_routes.router, prefix="/api")
 

@@ -203,6 +203,34 @@ export interface CacheInfo {
   models: CachedModel[]
 }
 
+// ---- Benchmark datasets (ModelScope cache) ----
+export interface DatasetEntry {
+  key: string
+  label: string
+  dataset_id: string
+  file: string
+  note: string
+  approx: string
+  cached: boolean
+  size_on_disk: number
+}
+
+export interface DatasetCacheInfo {
+  disk: DiskUsage
+  datasets: DatasetEntry[]
+}
+
+export interface DatasetDownloadJob {
+  key: string
+  label: string
+  state: DownloadState
+  total_bytes: number | null
+  downloaded_bytes: number
+  error: string | null
+  started_at: number
+  updated_at: number
+}
+
 export type DownloadState = 'pending' | 'downloading' | 'completed' | 'failed'
 
 export interface DownloadJob {
@@ -289,7 +317,7 @@ export interface PerfRun {
 export interface PerfRequest {
   model: string
   name?: string
-  mode: 'sweep' | 'openloop' | 'multiturn' | 'sla' | 'embedding' | 'rerank'
+  mode: 'sweep' | 'openloop' | 'multiturn' | 'sla' | 'embedding' | 'rerank' | 'speed'
   target: 'router' | 'instance'
   instance_key?: string
   dataset: 'random' | 'openqa'
@@ -297,6 +325,9 @@ export interface PerfRequest {
   max_tokens: number
   min_prompt_length: number
   max_prompt_length: number
+  prefix_length?: number
+  duration?: number
+  speed_long?: boolean
   stream: boolean
   // sweep / multiturn
   parallel?: number[]

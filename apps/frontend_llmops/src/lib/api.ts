@@ -4,6 +4,8 @@ import type {
   ConfigSummary,
   CreatedKey,
   CreateModelPayload,
+  DatasetCacheInfo,
+  DatasetDownloadJob,
   DownloadJob,
   GpuProcess,
   HealthZ,
@@ -203,6 +205,17 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ repo_id: repoId }),
     }),
+
+  // ---- Benchmark datasets (ModelScope cache) --------------------------------
+  getDatasets: () => request<DatasetCacheInfo>(API_BASE, '/api/datasets'),
+  listDatasetDownloads: () => request<DatasetDownloadJob[]>(API_BASE, '/api/datasets/downloads'),
+  startDatasetDownload: (key: string) =>
+    request<DatasetDownloadJob>(API_BASE, '/api/datasets/download', {
+      method: 'POST',
+      body: JSON.stringify({ key }),
+    }),
+  deleteDataset: (key: string) =>
+    request<null>(API_BASE, `/api/datasets/${key}`, { method: 'DELETE' }),
 
   // ---- Load testing (perf) --------------------------------------------------
   listPerf: () => request<{ busy: boolean; runs: PerfRun[] }>(API_BASE, '/api/perf'),

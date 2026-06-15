@@ -29,6 +29,8 @@ services:
       - LLMOPS_DB_PATH=/app/data/llmops.db
       - LLMOPS_OVERLAY_PATH=/app/data/dynamic_models.json
       - HF_HOME=/hf
+      # evalscope perf datasets (ShareGPT, openqa…) cache here, not in HF_HOME.
+      - MODELSCOPE_CACHE=/modelscope/hub
       - NVIDIA_VISIBLE_DEVICES=${NVIDIA_VISIBLE_DEVICES:-all}
     volumes:
       # Edit models without rebuilding: the canonical config is bind-mounted.
@@ -37,6 +39,9 @@ services:
       # HF cache bind-mounted to a host dir so weights are browsable locally and
       # shared with a host-side HF cache. HF_HOME=/hf -> /hf/hub == <dir>/hub.
       - ${HF_CACHE_DIR:-${HOME}/.cache/huggingface}:/hf
+      # ModelScope cache (benchmark datasets). MODELSCOPE_CACHE=/modelscope/hub
+      # -> /modelscope/hub/datasets == <dir>/hub/datasets, mirroring the host layout.
+      - ${MODELSCOPE_CACHE_DIR:-${HOME}/.cache/modelscope}:/modelscope
       - /etc/localtime:/etc/localtime:ro
     ports:
       # Host ports are configurable to avoid collisions; container ports are

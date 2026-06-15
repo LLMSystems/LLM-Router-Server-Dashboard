@@ -118,12 +118,38 @@ class PerfManager:
             cfg["api_key"] = self.settings.admin_token
         return cfg
 
+    def _build_speed_cfg(self, req: dict, run_dir: str, model_field: str, url: str, tokenizer: str) -> dict:
+        """Single-request speed baseline (evalscope `speed_benchmark`). Self-contained
+        dataset (no download), fixed prompt lengths, fixed 2048-token output, hits
+        /v1/completions (chat templates would skew the numbers)."""
+        out = req.get("max_tokens", 2048)
+        cfg: dict = {
+            "model": model_field,
+            "url": url.replace("/v1/chat/completions", "/v1/completions"),
+            "api": "openai",
+            "dataset": "speed_benchmark_long" if req.get("speed_long") else "speed_benchmark",
+            "tokenizer_path": tokenizer,
+            "parallel": 1,
+            "number": 4 if req.get("speed_long") else 8,  # lengths × 2 repeats
+            "min_tokens": out,
+            "max_tokens": out,
+            "stream": True,
+            "outputs_dir": run_dir,
+            "no_timestamp": True,
+            "name": "run",
+        }
+        if getattr(self.settings, "admin_token", ""):
+            cfg["api_key"] = self.settings.admin_token
+        return cfg
+
     def _build_cfg(self, req: dict, run_dir: str) -> dict:
         mode = req.get("mode", "sweep")
         model_field, url, tokenizer = self._target(req)
 
         if mode in ("embedding", "rerank"):
             return self._build_embedding_cfg(req, run_dir, model_field, url, tokenizer)
+        if mode == "speed":
+            return self._build_speed_cfg(req, run_dir, model_field, url, tokenizer)
 
         cfg: dict = {
             "model": model_field,
@@ -143,7 +169,8 @@ class PerfManager:
                     "min_tokens": cfg["max_tokens"],  # fixed output length for fair comparison
                     "min_prompt_length": req.get("min_prompt_length", 512),
                     "max_prompt_length": req.get("max_prompt_length", 512),
-                    "prefix_length": 0,
+                    # Shared prefix across requests in a point — raise to observe prefix-cache gains.
+                    "prefix_length": req.get("prefix_length", 0),
                     "extra_args": {"ignore_eos": True},
                 })
 
@@ -169,6 +196,8 @@ class PerfManager:
         elif mode == "openloop":
             _random_knobs()
             cfg.update({"open_loop": True, "rate": req["rate"], "number": req["number"]})
+            if req.get("duration"):
+                cfg["duration"] = req["duration"]
         elif mode == "multiturn":
             cfg.update({
                 "multi_turn": True,
@@ -180,6 +209,8 @@ class PerfManager:
             })
             if req.get("mt_dataset_path"):
                 cfg["dataset_path"] = req["mt_dataset_path"]
+            if req.get("duration"):  # soft exit: stop starting new conversations after N seconds
+                cfg["duration"] = req["duration"]
         else:  # sweep (closed-loop)
             _random_knobs()
             cfg["parallel"] = req["parallel"]
