@@ -165,6 +165,43 @@ class FakeStore:
     async def mark_stale_perf_runs(self):
         self.__init_perf()
 
+    # -- Eval runs --
+    def __init_eval(self):
+        if not hasattr(self, "evals"):
+            self.evals = []
+
+    async def create_eval_run(self, model, target_url, datasets, params, name=None, ts=None):
+        self.__init_eval()
+        rid = len(self.evals) + 1
+        self.evals.append({"id": rid, "model": model, "target_url": target_url, "datasets": datasets,
+                          "params": params, "name": name, "status": "running", "result": None,
+                          "output_dir": None, "error": None, "created_at": 0.0, "started_at": 0.0,
+                          "finished_at": None})
+        return rid
+
+    async def finish_eval_run(self, run_id, status, result=None, output_dir=None, error=None, ts=None):
+        self.__init_eval()
+        for r in self.evals:
+            if r["id"] == run_id:
+                r.update(status=status, result=result, output_dir=output_dir, error=error)
+
+    async def list_eval_runs(self, limit=50):
+        self.__init_eval()
+        return list(reversed(self.evals))[:limit]
+
+    async def get_eval_run(self, run_id):
+        self.__init_eval()
+        return next((r for r in self.evals if r["id"] == run_id), None)
+
+    async def delete_eval_run(self, run_id):
+        self.__init_eval()
+        before = len(self.evals)
+        self.evals = [r for r in self.evals if r["id"] != run_id]
+        return len(self.evals) < before
+
+    async def mark_stale_eval_runs(self):
+        self.__init_eval()
+
     async def api_key_usage(self):
         agg: dict = {}
         for r in self.reqs:
@@ -235,6 +272,10 @@ def app(monkeypatch):
     from app.services.dataset_downloads import DatasetDownloadManager
     application.state.dataset_download_manager = DatasetDownloadManager()
     application.state.perf_manager = PerfManager(
+        store, application.state.manager, settings, str(BACKEND_ROOT), "http://127.0.0.1:8887"
+    )
+    from app.eval.manager import EvalManager
+    application.state.eval_manager = EvalManager(
         store, application.state.manager, settings, str(BACKEND_ROOT), "http://127.0.0.1:8887"
     )
     return application

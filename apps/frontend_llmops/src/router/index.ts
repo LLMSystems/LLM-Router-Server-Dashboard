@@ -58,6 +58,12 @@ const router = createRouter({
       component: () => import('@/views/DatasetsView.vue'),
     },
     {
+      path: '/eval',
+      name: 'eval',
+      meta: { title: 'Evaluation' },
+      component: () => import('@/views/EvalView.vue'),
+    },
+    {
       path: '/keys',
       name: 'keys',
       meta: { title: 'API Keys' },

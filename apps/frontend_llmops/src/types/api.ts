@@ -208,9 +208,12 @@ export interface DatasetEntry {
   key: string
   label: string
   dataset_id: string
-  file: string
-  note: string
-  approx: string
+  category: 'perf' | 'eval'
+  file?: string // perf datasets only (single file); eval datasets are whole-repo
+  note?: string
+  approx?: string
+  tier?: string // eval datasets: capability group (基線/中文/推理/數學/程式碼)
+  metric?: string // eval datasets: scoring metric
   cached: boolean
   size_on_disk: number
 }
@@ -349,6 +352,69 @@ export interface PerfRequest {
   sla_fixed_parallel?: number
   // embedding / rerank
   rerank_documents?: number
+}
+
+// ---- Accuracy / quality evaluation (evalscope run_task) ----
+export interface EvalDataset {
+  key: string
+  label: string
+  dataset_id: string
+  category: 'eval'
+  tier: string
+  metric?: string
+  note?: string
+}
+
+export interface EvalMetricScore {
+  name: string
+  score: number
+  macro_score: number
+  num: number
+}
+export interface EvalDatasetScore {
+  dataset: string
+  pretty: string
+  score: number
+  num: number
+  metrics: EvalMetricScore[]
+}
+/** Parsed shape of EvalRun.result (string-encoded). */
+export interface EvalResult {
+  datasets: EvalDatasetScore[]
+}
+
+export type EvalStatus = 'running' | 'completed' | 'failed' | 'cancelled'
+
+export interface EvalRun {
+  id: number
+  created_at: number
+  name: string | null
+  model: string
+  target_url: string
+  datasets: string // JSON string of dataset ids
+  status: EvalStatus
+  params: string | null
+  result?: string | null // JSON string of EvalResult
+  output_dir: string | null
+  error: string | null
+  started_at: number | null
+  finished_at: number | null
+}
+
+export interface EvalRequest {
+  model: string
+  name?: string
+  target: 'router' | 'instance'
+  instance_key?: string
+  datasets: string[]
+  limit?: number | null
+  repeats?: number
+  temperature?: number
+  top_p?: number
+  max_tokens?: number
+  eval_batch_size?: number
+  timeout?: number
+  stream?: boolean
 }
 
 export type SettingValue = string | number | boolean | null

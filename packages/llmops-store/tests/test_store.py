@@ -107,6 +107,28 @@ async def test_mark_stale_perf_runs(store):
     assert run["status"] == "failed" and "restart" in run["error"]
 
 
+async def test_eval_run_lifecycle(store):
+    rid = await store.create_eval_run(model="Qwen", target_url="http://r/v1",
+                                      datasets='["gsm8k","mmlu"]', params='{"limit":5}', name="ci")
+    run = await store.get_eval_run(rid)
+    assert run["status"] == "running" and run["model"] == "Qwen"
+    assert run["datasets"] == '["gsm8k","mmlu"]'
+    await store.finish_eval_run(rid, "completed", result='{"datasets":[{"dataset":"gsm8k","score":0.4}]}',
+                                output_dir="/out")
+    run = await store.get_eval_run(rid)
+    assert run["status"] == "completed" and "gsm8k" in run["result"]
+    assert any(r["id"] == rid for r in await store.list_eval_runs())
+    assert await store.delete_eval_run(rid) is True
+    assert await store.get_eval_run(rid) is None
+
+
+async def test_mark_stale_eval_runs(store):
+    rid = await store.create_eval_run(model="M", target_url="u", datasets="[]", params="{}")
+    await store.mark_stale_eval_runs()
+    run = await store.get_eval_run(rid)
+    assert run["status"] == "failed" and "restart" in run["error"]
+
+
 async def test_record_and_query_model_events(store):
     await store.record_model_event("Qwen::a", "llm", "stopped", "starting")
     await store.record_model_event("Qwen::a", "llm", "starting", "ready")

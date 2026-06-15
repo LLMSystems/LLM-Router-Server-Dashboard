@@ -21,6 +21,7 @@ from app.api import config as config_routes
 from app.api import datasets as dataset_routes
 from app.api import downloads as download_routes
 from app.api import embedding as embedding_routes
+from app.api import eval as eval_routes
 from app.api import models as model_routes
 from app.api import perf as perf_routes
 from app.api import observability as observability_routes
@@ -33,6 +34,7 @@ from app.llmops.launchers import EmbeddingLauncher, VllmLauncher
 from app.llmops.manager import ModelManager, build_registry
 from app.llmops.reconciler import adopt_running, reconcile_loop
 from app.llmops.state import ModelState
+from app.eval.manager import EvalManager
 from app.perf.manager import PerfManager
 from app.services.dataset_downloads import DatasetDownloadManager
 from app.services.downloads import DownloadManager
@@ -92,7 +94,10 @@ async def lifespan(app: FastAPI):
     perf_root = os.path.join(os.path.dirname(store.db_path), "perf")
     router_url = os.environ.get("LLMOPS_ROUTER_URL", "http://127.0.0.1:8887")
     app.state.perf_manager = PerfManager(store, manager, settings, perf_root, router_url)
+    eval_root = os.path.join(os.path.dirname(store.db_path), "eval")
+    app.state.eval_manager = EvalManager(store, manager, settings, eval_root, router_url)
     await store.mark_stale_perf_runs()  # orphaned 'running' rows from a prior crash
+    await store.mark_stale_eval_runs()
 
     logger.info("Config loaded from %s (%d instances)", config_path, len(registry.keys()))
     logger.info("Telemetry store at %s", store.db_path)
@@ -146,6 +151,7 @@ def create_app() -> FastAPI:
     app.include_router(dataset_routes.router, prefix="/api")
     app.include_router(embedding_routes.router, prefix="/api")
     app.include_router(perf_routes.router, prefix="/api")
+    app.include_router(eval_routes.router, prefix="/api")
 
     @app.get("/healthz", tags=["health"])
     async def healthz():

@@ -7,6 +7,9 @@ import type {
   DatasetCacheInfo,
   DatasetDownloadJob,
   DownloadJob,
+  EvalDataset,
+  EvalRequest,
+  EvalRun,
   GpuProcess,
   HealthZ,
   LogResponse,
@@ -229,6 +232,20 @@ export const api = {
   deletePerf: (id: number) => request<null>(API_BASE, `/api/perf/${id}`, { method: 'DELETE' }),
   /** URL of the full evalscope HTML report (open in a new tab). */
   perfReportUrl: (id: number) => `${API_BASE}/api/perf/${id}/report`,
+
+  // ---- Accuracy / quality evaluation (eval) ---------------------------------
+  listEvalDatasets: () => request<{ datasets: EvalDataset[] }>(API_BASE, '/api/eval/datasets'),
+  listEval: () => request<{ busy: boolean; runs: EvalRun[] }>(API_BASE, '/api/eval'),
+  startEval: (body: EvalRequest) =>
+    request<EvalRun>(API_BASE, '/api/eval', { method: 'POST', body: JSON.stringify(body) }),
+  getEval: (id: number) => request<EvalRun>(API_BASE, `/api/eval/${id}`),
+  getEvalLog: (id: number, tail = 200) =>
+    request<{ content: string }>(API_BASE, `/api/eval/${id}/log?tail=${tail}`),
+  cancelEval: (id: number) =>
+    request<{ ok: boolean }>(API_BASE, `/api/eval/${id}/cancel`, { method: 'POST' }),
+  deleteEval: (id: number) => request<null>(API_BASE, `/api/eval/${id}`, { method: 'DELETE' }),
+  /** URL of the full evalscope HTML report (open in a new tab). */
+  evalReportUrl: (id: number) => `${API_BASE}/api/eval/${id}/report`,
 
   listKeys: () => request<ApiKey[]>(API_BASE, '/api/keys'),
   createKey: (name: string, rpmLimit?: number | null) =>

@@ -5,7 +5,7 @@ import { api, ApiError } from '@/lib/api'
 import { useAuth } from '@/composables/useAuth'
 import { toast } from '@/lib/toast'
 import { formatBytes } from '@/lib/utils'
-import type { DatasetCacheInfo, DatasetDownloadJob } from '@/types/api'
+import type { DatasetCacheInfo, DatasetDownloadJob, DatasetEntry } from '@/types/api'
 import Card from '@/components/ui/Card.vue'
 import Button from '@/components/ui/Button.vue'
 import Badge from '@/components/ui/Badge.vue'
@@ -24,6 +24,20 @@ const jobsByKey = computed(() => Object.fromEntries(downloads.value.map((j) => [
 const activeDownloads = computed(() =>
   downloads.value.filter((d) => d.state === 'pending' || d.state === 'downloading'),
 )
+
+const perfDatasets = computed(() => (cache.value?.datasets ?? []).filter((d) => d.category === 'perf'))
+// Eval datasets grouped by capability tier, preserving catalog order.
+const evalTiers = computed(() => {
+  const groups: { tier: string; items: DatasetEntry[] }[] = []
+  for (const d of cache.value?.datasets ?? []) {
+    if (d.category !== 'eval') continue
+    const tier = d.tier ?? '其他'
+    let g = groups.find((x) => x.tier === tier)
+    if (!g) groups.push((g = { tier, items: [] }))
+    g.items.push(d)
+  }
+  return groups
+})
 
 async function loadCache() {
   try {
@@ -86,8 +100,8 @@ onBeforeUnmount(() => {
     <div>
       <h1 class="flex items-center gap-2 text-lg font-semibold"><Database class="size-5" />資料集庫</h1>
       <p class="mt-0.5 text-sm text-muted-foreground">
-        預先下載壓測資料集到共用 ModelScope 快取，跑壓測時就不必等首次下載（ShareGPT 約 460&nbsp;MB）。
-        <span class="font-mono">random</span> / 速度基準等資料集為即時生成，無需下載。
+        預先下載資料集到共用 ModelScope 快取，跑壓測 / 評測時就不必等首次下載。
+        <span class="font-mono">random</span> / 速度基準為即時生成，無需下載。
       </p>
     </div>
 
@@ -109,11 +123,11 @@ onBeforeUnmount(() => {
       </div>
     </Card>
 
-    <!-- Catalog -->
+    <!-- Perf (load-test) datasets -->
     <Card class="overflow-hidden">
-      <div class="border-b border-border/60 px-5 py-3 text-sm font-semibold">可用資料集</div>
-      <div v-if="cache?.datasets.length" class="divide-y divide-border/60">
-        <div v-for="d in cache.datasets" :key="d.key" class="flex items-center gap-4 px-5 py-3">
+      <div class="border-b border-border/60 px-5 py-3 text-sm font-semibold">壓測資料集</div>
+      <div v-if="perfDatasets.length" class="divide-y divide-border/60">
+        <div v-for="d in perfDatasets" :key="d.key" class="flex items-center gap-4 px-5 py-3">
           <div class="min-w-0 flex-1">
             <p class="flex items-center gap-2 text-sm font-medium">
               {{ d.label }}
@@ -140,7 +154,47 @@ onBeforeUnmount(() => {
           </div>
         </div>
       </div>
-      <p v-else class="px-5 py-10 text-center text-sm text-muted-foreground">尚無資料集。</p>
+    </Card>
+
+    <!-- Eval (accuracy) datasets, grouped by capability tier -->
+    <Card class="overflow-hidden">
+      <div class="flex items-center justify-between border-b border-border/60 px-5 py-3">
+        <span class="text-sm font-semibold">評測資料集</span>
+        <span class="text-xs text-muted-foreground">下載後可在「評測」頁選用</span>
+      </div>
+      <div v-for="g in evalTiers" :key="g.tier">
+        <div class="bg-muted/40 px-5 py-1.5 text-xs font-medium text-muted-foreground">{{ g.tier }}</div>
+        <div class="divide-y divide-border/60">
+          <div v-for="d in g.items" :key="d.key" class="flex items-center gap-4 px-5 py-3">
+            <div class="min-w-0 flex-1">
+              <p class="flex items-center gap-2 text-sm font-medium">
+                {{ d.label }}
+                <Badge v-if="d.cached" variant="default">已快取</Badge>
+                <Badge v-if="d.note" variant="secondary">{{ d.note }}</Badge>
+              </p>
+              <p class="truncate text-xs text-muted-foreground">
+                <span class="font-mono">{{ d.dataset_id }}</span>
+                <span v-if="d.metric"> · {{ d.metric }}</span>
+              </p>
+            </div>
+            <span class="shrink-0 tabular text-sm text-muted-foreground">
+              {{ d.cached ? formatBytes(d.size_on_disk) : '—' }}
+            </span>
+            <div class="flex w-24 shrink-0 justify-end">
+              <Button v-if="isDownloading(d.key)" size="sm" variant="ghost" disabled>
+                <Loader2 class="size-3.5 animate-spin" />
+                <span class="tabular">{{ formatBytes(jobsByKey[d.key]!.downloaded_bytes) }}</span>
+              </Button>
+              <Button v-else-if="d.cached" size="icon-sm" variant="ghost" title="刪除快取" @click="remove(d.key, d.label)">
+                <Trash2 class="size-4" />
+              </Button>
+              <Button v-else size="sm" variant="outline" @click="download(d.key)">
+                <Download class="size-3.5" />下載
+              </Button>
+            </div>
+          </div>
+        </div>
+      </div>
     </Card>
 
     <!-- Failed downloads -->

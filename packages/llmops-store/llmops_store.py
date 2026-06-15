@@ -87,6 +87,23 @@ CREATE TABLE IF NOT EXISTS perf_runs (
     finished_at REAL
 );
 CREATE INDEX IF NOT EXISTS idx_perf_runs_created ON perf_runs(created_at);
+
+CREATE TABLE IF NOT EXISTS eval_runs (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at  REAL    NOT NULL,
+    name        TEXT,
+    model       TEXT    NOT NULL,
+    target_url  TEXT    NOT NULL,
+    datasets    TEXT    NOT NULL,      -- JSON list of dataset ids
+    status      TEXT    NOT NULL,      -- running | completed | failed | cancelled
+    params      TEXT,                  -- JSON of the launch config
+    result      TEXT,                  -- JSON: {dataset: {metric: score, ...}, ...}
+    output_dir  TEXT,                  -- evalscope raw output directory
+    error       TEXT,
+    started_at  REAL,
+    finished_at REAL
+);
+CREATE INDEX IF NOT EXISTS idx_eval_runs_created ON eval_runs(created_at);
 """
 
 # Columns added after the original schema shipped; applied on init() for DBs
@@ -281,6 +298,65 @@ class LLMOpsStore:
         previous backend) — flip it to failed so it doesn't linger forever."""
         await self._db.execute(
             "UPDATE perf_runs SET status = 'failed', error = 'interrupted by restart' "
+            "WHERE status = 'running'"
+        )
+        await self._db.commit()
+
+    # -- Eval runs (accuracy / quality benchmarks) -------------------------
+
+    async def create_eval_run(
+        self, model: str, target_url: str, datasets: str, params: str,
+        name: Optional[str] = None, ts: Optional[float] = None,
+    ) -> int:
+        import time
+
+        now = ts or time.time()
+        cur = await self._db.execute(
+            "INSERT INTO eval_runs (created_at, name, model, target_url, datasets, "
+            "status, params, started_at) VALUES (?, ?, ?, ?, ?, 'running', ?, ?)",
+            (now, name, model, target_url, datasets, params, now),
+        )
+        await self._db.commit()
+        return cur.lastrowid
+
+    async def finish_eval_run(
+        self, run_id: int, status: str, result: Optional[str] = None,
+        output_dir: Optional[str] = None, error: Optional[str] = None,
+        ts: Optional[float] = None,
+    ) -> None:
+        import time
+
+        await self._db.execute(
+            "UPDATE eval_runs SET status = ?, result = ?, output_dir = ?, error = ?, "
+            "finished_at = ? WHERE id = ?",
+            (status, result, output_dir, error, ts or time.time(), run_id),
+        )
+        await self._db.commit()
+
+    async def list_eval_runs(self, limit: int = 50) -> list[dict]:
+        cur = await self._db.execute(
+            "SELECT id, created_at, name, model, target_url, datasets, status, params, "
+            "result, output_dir, error, started_at, finished_at "
+            "FROM eval_runs ORDER BY id DESC LIMIT ?",
+            (limit,),
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
+    async def get_eval_run(self, run_id: int) -> Optional[dict]:
+        cur = await self._db.execute("SELECT * FROM eval_runs WHERE id = ?", (run_id,))
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def delete_eval_run(self, run_id: int) -> bool:
+        cur = await self._db.execute("DELETE FROM eval_runs WHERE id = ?", (run_id,))
+        await self._db.commit()
+        return cur.rowcount > 0
+
+    async def mark_stale_eval_runs(self) -> None:
+        """On startup, flip orphaned 'running' rows (process died with the previous
+        backend) to failed so they don't linger forever."""
+        await self._db.execute(
+            "UPDATE eval_runs SET status = 'failed', error = 'interrupted by restart' "
             "WHERE status = 'running'"
         )
         await self._db.commit()

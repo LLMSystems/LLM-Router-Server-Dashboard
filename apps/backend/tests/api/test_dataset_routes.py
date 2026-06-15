@@ -8,9 +8,13 @@ def test_list_datasets_returns_catalog_and_disk(client):
     body = client.get("/api/datasets").json()
     assert "disk" in body and {"total", "used", "free"} <= body["disk"].keys()
     keys = {d["key"] for d in body["datasets"]}
-    assert {"share_gpt_zh", "openqa"} <= keys
+    # perf (single-file) + eval (whole-repo) datasets both listed
+    assert {"share_gpt_zh", "openqa"} <= keys  # perf
+    assert {"gsm8k", "mmlu", "ceval"} <= keys  # eval
     for d in body["datasets"]:
-        assert {"label", "dataset_id", "file", "cached", "size_on_disk"} <= d.keys()
+        assert {"label", "dataset_id", "category", "cached", "size_on_disk"} <= d.keys()
+        if d["category"] == "perf":
+            assert "file" in d
 
 
 def test_download_unknown_dataset_is_400(client):
