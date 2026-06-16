@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { Box, ChevronDown, Loader2, Play, RotateCw, Sparkles, Square } from '@lucide/vue'
+import { Box, ChevronDown, Loader2, Play, Plus, RotateCw, Sparkles, Square } from '@lucide/vue'
 import Card from '@/components/ui/Card.vue'
 import Badge from '@/components/ui/Badge.vue'
 import Button from '@/components/ui/Button.vue'
@@ -12,7 +12,7 @@ import { useModelControl } from '@/composables/useModelControl'
 import type { ModelState, ModelView } from '@/types/api'
 
 const props = defineProps<{ group: string; instances: ModelView[] }>()
-const emit = defineEmits<{ open: [key: string] }>()
+const emit = defineEmits<{ open: [key: string]; 'add-instance': [group: string] }>()
 
 const models = useModelsStore()
 const traffic = useTrafficStore()
@@ -247,27 +247,40 @@ const startLockTitle = computed(() =>
       </div>
     </div>
 
-    <!-- Group actions: only meaningful for multi-instance groups (a single
-         instance already has its own start/stop button on the row). -->
-    <div v-if="instances.length > 1" class="flex gap-2 border-t border-border/40 p-3">
+    <!-- Group actions. Bulk start/stop is only meaningful for multi-instance
+         groups; "add instance" is offered for any LLM group (scale up a single
+         instance too). -->
+    <div v-if="kind === 'llm' || instances.length > 1" class="flex gap-2 border-t border-border/40 p-3">
+      <template v-if="instances.length > 1">
+        <Button
+          size="sm"
+          variant="success"
+          class="flex-1"
+          :disabled="!startableKeys.length || startLocked"
+          :title="startLocked ? startLockTitle : '依序啟動所有實例'"
+          @click="control.requestMany(startableKeys, 'start')"
+        >
+          <Play class="size-3.5" />全部啟動
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          class="flex-1"
+          :disabled="!stoppableKeys.length"
+          @click="control.requestMany(stoppableKeys, 'stop')"
+        >
+          <Square class="size-3.5" />全部停止
+        </Button>
+      </template>
       <Button
-        size="sm"
-        variant="success"
-        class="flex-1"
-        :disabled="!startableKeys.length || startLocked"
-        :title="startLocked ? startLockTitle : '依序啟動所有實例'"
-        @click="control.requestMany(startableKeys, 'start')"
-      >
-        <Play class="size-3.5" />全部啟動
-      </Button>
-      <Button
+        v-if="kind === 'llm'"
         size="sm"
         variant="outline"
-        class="flex-1"
-        :disabled="!stoppableKeys.length"
-        @click="control.requestMany(stoppableKeys, 'stop')"
+        :class="instances.length > 1 ? '' : 'flex-1'"
+        title="為此模型新增一個負載平衡實例"
+        @click="emit('add-instance', group)"
       >
-        <Square class="size-3.5" />全部停止
+        <Plus class="size-3.5" />新增實例
       </Button>
     </div>
   </Card>

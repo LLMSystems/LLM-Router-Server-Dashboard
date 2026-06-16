@@ -27,7 +27,7 @@ from app.llmops.instance import ModelInstance
 from app.llmops.process import read_log_tail, terminate_process_group
 from app.llmops.probes import is_ready
 from app.llmops.registry import ModelRegistry
-from app.llmops.state import Desired, ModelState
+from app.llmops.state import Desired, ModelKind, ModelState
 
 logger = logging.getLogger(__name__)
 
@@ -199,6 +199,16 @@ async def reconcile_once(
         )
     transitions = [t for sub in results for t in sub]
     await _persist(store, transitions)
+    # An LLM instance that just turned READY may be a newly-added overlay
+    # instance the router doesn't know about yet. Nudge it to re-read config so
+    # the instance joins its load-balancing pool — only now that it's actually
+    # serving, so the router never routes to a not-yet-up backend. Idempotent;
+    # one reload per pass even if several instances came up together.
+    if manager is not None and any(
+        to == ModelState.READY and inst.kind == ModelKind.LLM
+        for inst, _frm, to, _detail in transitions
+    ):
+        await manager.trigger_router_reload()
     if manager is not None and settings.auto_restart:
         await _process_restarts(registry, settings, store, manager)
 

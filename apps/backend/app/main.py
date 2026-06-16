@@ -78,9 +78,10 @@ async def lifespan(app: FastAPI):
 
     launchers = [VllmLauncher(), EmbeddingLauncher()]
     registry = build_registry(config, config_path, launchers)
+    router_url = os.environ.get("LLMOPS_ROUTER_URL", "http://127.0.0.1:8887")
     manager = ModelManager(
         registry, launchers, http_client, config, config_path, settings, store=store,
-        overlay_path=ov_path,
+        overlay_path=ov_path, router_url=router_url,
     )
 
     app.state.config = config
@@ -95,7 +96,6 @@ async def lifespan(app: FastAPI):
     app.state.dataset_download_manager = DatasetDownloadManager()
     app.state.lora_download_manager = LoraDownloadManager()
     perf_root = os.path.join(os.path.dirname(store.db_path), "perf")
-    router_url = os.environ.get("LLMOPS_ROUTER_URL", "http://127.0.0.1:8887")
     app.state.perf_manager = PerfManager(store, manager, settings, perf_root, router_url)
     eval_root = os.path.join(os.path.dirname(store.db_path), "eval")
     app.state.eval_manager = EvalManager(store, manager, settings, eval_root, router_url)

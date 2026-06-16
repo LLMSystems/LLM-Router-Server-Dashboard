@@ -77,6 +77,7 @@ class ModelManager:
         settings: BackendSettings,
         store=None,
         overlay_path=None,
+        router_url=None,
     ) -> None:
         self.registry = registry
         self._launchers: dict[ModelKind, Launcher] = {l.kind: l for l in launchers}
@@ -86,6 +87,9 @@ class ModelManager:
         self.settings = settings
         self.store = store
         self.overlay_path = overlay_path
+        # Used to nudge the router to re-read config/overlay when an instance
+        # becomes routable (e.g. a newly-added overlay instance turns READY).
+        self.router_url = router_url.rstrip("/") if router_url else None
 
     def _require(self, key: str) -> ModelInstance:
         inst = self.registry.get(key)
@@ -125,6 +129,20 @@ class ModelManager:
             await self.http_client.post(self.settings.alert_webhook, json=payload, timeout=5.0)
         except Exception:
             logger.warning("Alert webhook POST failed for %s", inst.key)
+
+    async def trigger_router_reload(self) -> bool:
+        """Best-effort: ask the router to re-read config + overlay so a
+        newly-routable instance joins its load-balancing pool. Idempotent and
+        cheap (the router just swaps an in-memory dict). Never raises — routing
+        recovers on the next reload if this one is lost."""
+        if not self.router_url:
+            return False
+        try:
+            resp = await self.http_client.post(f"{self.router_url}/reload", timeout=10.0)
+            return resp.status_code < 400
+        except Exception:
+            logger.warning("Router reload POST failed (%s/reload)", self.router_url)
+            return False
 
     async def list(self) -> list[ModelInstance]:
         return await self.registry.snapshot()

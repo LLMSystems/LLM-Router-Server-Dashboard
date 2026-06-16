@@ -7,6 +7,7 @@ import { useAuth } from '@/composables/useAuth'
 import ModelGroupCard from '@/components/ModelGroupCard.vue'
 import ModelDetailDrawer from '@/components/ModelDetailDrawer.vue'
 import AddModelDialog from '@/components/AddModelDialog.vue'
+import AddInstanceDialog from '@/components/AddInstanceDialog.vue'
 import Button from '@/components/ui/Button.vue'
 import Input from '@/components/ui/Input.vue'
 import type { ModelKind, ModelView } from '@/types/api'
@@ -23,6 +24,8 @@ const selectedKey = ref<string | null>(null)
 const addOpen = ref(false)
 const editOpen = ref(false)
 const editKey = ref<string | null>(null)
+const addInstanceOpen = ref(false)
+const addInstanceGroup = ref<string | null>(null)
 
 function onCreated() {
   // Pull fresh model list + config so the new instance (and its GPU/params) show.
@@ -40,6 +43,19 @@ async function openEdit(key: string) {
   drawerOpen.value = false
   editOpen.value = true
 }
+
+async function openAddInstance(group: string) {
+  if (!(await ensureUnlocked())) return
+  addInstanceGroup.value = group
+  addInstanceOpen.value = true
+}
+
+// Live instances of the group the add-instance dialog targets.
+const addInstanceInstances = computed(() =>
+  addInstanceGroup.value
+    ? models.models.filter((m) => (m.key.split('::')[0] ?? m.key) === addInstanceGroup.value)
+    : [],
+)
 
 const filtered = computed(() =>
   models.models.filter((m) => {
@@ -117,6 +133,7 @@ const kinds: { value: 'all' | ModelKind; label: string }[] = [
         :group="g.group"
         :instances="g.instances"
         @open="openDetail"
+        @add-instance="openAddInstance"
       />
     </div>
     <div
@@ -137,5 +154,12 @@ const kinds: { value: 'all' | ModelKind; label: string }[] = [
     />
     <AddModelDialog v-model:open="addOpen" @created="onCreated" />
     <AddModelDialog v-model:open="editOpen" mode="edit" :edit-key="editKey" @updated="onCreated" />
+    <AddInstanceDialog
+      v-if="addInstanceGroup"
+      v-model:open="addInstanceOpen"
+      :group="addInstanceGroup"
+      :instances="addInstanceInstances"
+      @created="onCreated"
+    />
   </div>
 </template>

@@ -175,3 +175,41 @@ async def test_no_alert_when_webhook_unset(tmp_path):
     await mgr._record(inst, ModelState.STARTING, ModelState.FAILED, "boom")
     await asyncio.sleep(0)
     assert posts == []
+
+
+class _FakeResp:
+    def __init__(self, status_code):
+        self.status_code = status_code
+
+
+async def test_trigger_router_reload_posts_to_router(tmp_path):
+    mgr, _ = _manager(tmp_path)
+    mgr.router_url = "http://router:8887"
+    posts: list = []
+
+    class _Client:
+        async def post(self, url, json=None, timeout=None):
+            posts.append(url)
+            return _FakeResp(200)
+
+    mgr.http_client = _Client()
+    assert await mgr.trigger_router_reload() is True
+    assert posts == ["http://router:8887/reload"]
+
+
+async def test_trigger_router_reload_noop_without_url(tmp_path):
+    mgr, _ = _manager(tmp_path)
+    mgr.router_url = None
+    assert await mgr.trigger_router_reload() is False
+
+
+async def test_trigger_router_reload_swallows_errors(tmp_path):
+    mgr, _ = _manager(tmp_path)
+    mgr.router_url = "http://router:8887"
+
+    class _Client:
+        async def post(self, url, json=None, timeout=None):
+            raise RuntimeError("router down")
+
+    mgr.http_client = _Client()
+    assert await mgr.trigger_router_reload() is False
