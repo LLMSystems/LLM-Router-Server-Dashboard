@@ -49,11 +49,6 @@ LLM_engines:
       # Allow runtime (hot) load/unload from the dashboard — sets
       # VLLM_ALLOW_RUNTIME_LORA_UPDATING. Without it the LoRA set is fixed at launch.
       allow_runtime_lora: true
-      lora_modules:
-        - name: "qwen3-test-lora"
-          path: "/lora/qwen3-test-lora"
-          base_model_name: "Qwen/Qwen3-0.6B"
-
   # --- Single-instance group ---
   Qwen2.5-0.5B-Instruct:
     instances:
