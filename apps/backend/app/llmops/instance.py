@@ -65,6 +65,12 @@ class ModelInstance:
     restart_count: int = 0
     next_restart_at: Optional[float] = None
 
+    # Startup progress tracking: the reconciler watches the log file growing while
+    # STARTING so a slow weight download/load isn't mistaken for a hang. The
+    # timeout fires only after start_timeout of *no* progress, not total elapsed.
+    last_log_size: int = 0
+    last_progress_at: Optional[float] = None
+
     def touch(self) -> None:
         self.updated_at = time.time()
 

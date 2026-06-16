@@ -103,6 +103,11 @@ function isBusy(key: string) {
 function isRunning(state: ModelState) {
   return state === 'ready' || state === 'starting'
 }
+// Offer Stop whenever there's a live process to reap — including a FAILED
+// instance that still has one (e.g. a hung start before cleanup).
+function canStop(m: ModelView) {
+  return isRunning(m.state) || (m.state === 'failed' && m.pid != null)
+}
 
 // One LLM may start at a time: block this group's start controls while another
 // LLM is mid-start (embeddings are unrestricted).
@@ -187,7 +192,7 @@ const startLockTitle = computed(() =>
           </Tooltip>
 
           <Button
-            v-if="!isRunning(m.state)"
+            v-if="!canStop(m)"
             size="icon-sm"
             variant="success"
             :disabled="isBusy(m.key) || startLocked"
@@ -200,8 +205,8 @@ const startLockTitle = computed(() =>
             v-else
             size="icon-sm"
             variant="outline"
-            :disabled="isBusy(m.key) || !m.managed"
-            :title="!m.managed ? '外部模型 — 非本後端管理' : '停止'"
+            :disabled="!m.managed || m.state === 'stopping'"
+            :title="!m.managed ? '外部模型 — 非本後端管理' : m.state === 'failed' ? '終止殘留進程' : m.state === 'starting' ? '中止啟動' : '停止'"
             @click.stop="control.request(m.key, 'stop')"
           >
             <Loader2 v-if="isBusy(m.key)" class="size-3.5 animate-spin" /><Square v-else class="size-3.5" />

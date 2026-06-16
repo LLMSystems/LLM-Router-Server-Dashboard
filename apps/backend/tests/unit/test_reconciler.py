@@ -15,6 +15,14 @@ HEALTHY = "Qwen3-0.6B::qwen3"      # port 8002 (healthy in FakeHTTPClient)
 UNHEALTHY = "Qwen3-0.6B::qwen3-2"  # port 8004 (never answers)
 
 
+@pytest.fixture(autouse=True)
+def _no_real_kill(monkeypatch):
+    # The startup-timeout path reaps the process group; never send real signals.
+    import app.llmops.reconciler as rec
+
+    monkeypatch.setattr(rec, "terminate_process_group", lambda proc, timeout=10.0: None)
+
+
 def _registry():
     return build_registry(FAKE_CONFIG, "config.yaml", [VllmLauncher(), EmbeddingLauncher()])
 
@@ -42,11 +50,53 @@ async def test_starting_times_out_to_failed():
     inst.state = ModelState.STARTING
     inst.managed = True
     inst.proc = FakeProc()
+    inst.log_path = None  # nothing to observe -> no progress
     inst.started_at = time.time() - 10_000  # well past start_timeout
+    inst.last_progress_at = time.time() - 10_000  # and no log progress since
 
     await reconcile_once(reg, FakeHTTPClient(healthy_ports={8002}), _settings())
     assert inst.state == ModelState.FAILED
     assert "timeout" in inst.last_error
+    assert inst.proc is None  # hung process reaped — no orphan
+
+
+async def test_starting_with_log_progress_does_not_time_out(tmp_path):
+    # A growing log = still downloading/loading; must NOT be mistaken for a hang
+    # even when total elapsed exceeds start_timeout.
+    reg = _registry()
+    inst = reg.get(UNHEALTHY)
+    inst.state = ModelState.STARTING
+    inst.managed = True
+    inst.proc = FakeProc()
+    log = tmp_path / "run.log"
+    log.write_text("downloading weights 42%\n", encoding="utf-8")
+    inst.log_path = str(log)
+    inst.last_log_size = 0  # not yet observed -> this tick sees growth
+    inst.started_at = time.time() - 10_000
+    inst.last_progress_at = time.time() - 10_000
+
+    await reconcile_once(reg, FakeHTTPClient(healthy_ports={8002}), _settings())
+    assert inst.state == ModelState.STARTING  # progress detected -> keep waiting
+    assert inst.last_progress_at > time.time() - 5
+
+
+async def test_starting_timeout_schedules_restart(tmp_path):
+    reg = _registry()
+    inst = reg.get(UNHEALTHY)
+    inst.state = ModelState.STARTING
+    inst.managed = True
+    inst.desired = Desired.RUNNING
+    inst.proc = FakeProc()
+    log = tmp_path / "run.log"
+    log.write_text("stuck\n", encoding="utf-8")
+    inst.log_path = str(log)
+    inst.last_log_size = log.stat().st_size  # already observed -> no new progress
+    inst.started_at = time.time() - 10_000
+    inst.last_progress_at = time.time() - 10_000
+
+    await reconcile_once(reg, FakeHTTPClient(healthy_ports={8002}), _settings())
+    assert inst.state == ModelState.FAILED
+    assert inst.next_restart_at is not None  # recovery armed
 
 
 async def test_starting_with_dead_process_is_failed():

@@ -18,12 +18,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from typing import Optional
 
 from app.core.settings import BackendSettings
 from app.llmops.instance import ModelInstance
-from app.llmops.process import read_log_tail
+from app.llmops.process import read_log_tail, terminate_process_group
 from app.llmops.probes import is_ready
 from app.llmops.registry import ModelRegistry
 from app.llmops.state import Desired, ModelState
@@ -35,6 +36,37 @@ _LIVE_STATES = {ModelState.STARTING, ModelState.READY, ModelState.STOPPING}
 
 # (instance, from_state, to_state, detail)
 Transition = tuple[ModelInstance, ModelState, ModelState, Optional[str]]
+
+
+def _maybe_schedule_restart(inst: ModelInstance, settings: BackendSettings) -> None:
+    """Arm an auto-restart for a crashed/timed-out instance we still want running,
+    if it's managed and within the restart budget. Exponential backoff."""
+    if (
+        inst.desired == Desired.RUNNING
+        and inst.managed
+        and settings.auto_restart
+        and inst.restart_count < settings.max_restarts
+    ):
+        backoff = settings.restart_backoff_base * (2**inst.restart_count)
+        inst.next_restart_at = time.time() + backoff
+
+
+def _kill_async(proc, timeout: float) -> None:
+    """Reap a process group in the background — terminate_process_group blocks on
+    proc.wait, which must never run under the registry lock."""
+    loop = asyncio.get_event_loop()
+    fut = loop.run_in_executor(None, terminate_process_group, proc, timeout)
+    fut.add_done_callback(lambda f: f.exception())  # swallow; don't leak the future
+
+
+def _log_size(inst: ModelInstance) -> int:
+    """Current bytes of the instance log, or the last seen size if unreadable."""
+    if not inst.log_path:
+        return inst.last_log_size
+    try:
+        return os.path.getsize(inst.log_path)
+    except OSError:
+        return inst.last_log_size
 
 
 def _check_process_exit(inst: ModelInstance) -> Optional[Transition]:
@@ -67,15 +99,8 @@ async def _reconcile_instance(
     if exit_transition is not None:
         _, _, to_state, _ = exit_transition
         # Schedule an auto-restart for a crash (not a user-requested stop).
-        if (
-            to_state == ModelState.FAILED
-            and inst.desired == Desired.RUNNING
-            and inst.managed
-            and settings.auto_restart
-            and inst.restart_count < settings.max_restarts
-        ):
-            backoff = settings.restart_backoff_base * (2**inst.restart_count)
-            inst.next_restart_at = time.time() + backoff
+        if to_state == ModelState.FAILED:
+            _maybe_schedule_restart(inst, settings)
         return [exit_transition]
     if inst.state not in _LIVE_STATES:
         return []
@@ -90,10 +115,30 @@ async def _reconcile_instance(
                 inst.next_restart_at = None
                 inst.set_state(ModelState.READY)
                 return [(inst, ModelState.STARTING, ModelState.READY, None)]
-            if inst.started_at and (time.time() - inst.started_at) > settings.start_timeout:
-                detail = "startup timeout: /health did not return 200 in time"
+            # Progress-aware timeout: a growing log means the model is still
+            # downloading/loading, not hung — only fail after start_timeout of *no*
+            # progress, so a slow cold start isn't mistaken for a stall.
+            now = time.time()
+            size = _log_size(inst)
+            if size > inst.last_log_size:
+                inst.last_log_size = size
+                inst.last_progress_at = now
+            idle_since = inst.last_progress_at or inst.started_at or now
+            if now - idle_since > settings.start_timeout:
+                detail = (
+                    f"startup timeout: no log progress for {settings.start_timeout:.0f}s "
+                    "and /health never returned 200"
+                )
                 inst.last_error = detail
+                # Kill the (likely hung) process so FAILED is honest — no orphan
+                # left loading and holding the GPU.
+                proc = inst.proc
+                inst.proc = None
+                inst.pid = None
                 inst.set_state(ModelState.FAILED)
+                if proc is not None:
+                    _kill_async(proc, settings.stop_timeout)
+                _maybe_schedule_restart(inst, settings)  # recover if it was transient
                 return [(inst, ModelState.STARTING, ModelState.FAILED, detail)]
         elif inst.state == ModelState.READY and not ready:
             # Don't flap to FAILED on a transient health miss; real death is

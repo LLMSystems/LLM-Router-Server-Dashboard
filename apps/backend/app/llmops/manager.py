@@ -221,6 +221,9 @@ class ModelManager:
             inst.started_at = time.time()
             inst.ready_at = None
             inst.last_error = None
+            # Fresh startup-progress window (idle-timeout, not total-elapsed).
+            inst.last_log_size = 0
+            inst.last_progress_at = inst.started_at
             if reset_restart:
                 inst.restart_count = 0
             inst.next_restart_at = None

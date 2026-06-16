@@ -152,7 +152,14 @@ function fmtParam(v: string | number | boolean | null): string {
   if (typeof v === 'boolean') return v ? 'true' : 'false'
   return String(v)
 }
-const isRunning = computed(() => !!model.value && ['ready', 'starting'].includes(model.value.state))
+// Offer Stop whenever there's a live process to reap: running/starting, or a
+// FAILED instance that still has a process (e.g. a hung start before cleanup).
+const canStop = computed(
+  () =>
+    !!model.value &&
+    (['ready', 'starting'].includes(model.value.state) ||
+      (model.value.state === 'failed' && model.value.pid != null)),
+)
 const removable = computed(() => !!model.value && ['stopped', 'failed'].includes(model.value.state))
 // Params only apply on the next launch, so editing is allowed only while stopped.
 const editable = computed(() => removable.value && model.value?.kind === 'llm')
@@ -272,7 +279,7 @@ const eventColor: Record<string, string> = {
             <Trash2 class="size-4" />
           </Button>
           <Button
-            v-if="!isRunning"
+            v-if="!canStop"
             size="sm"
             variant="success"
             :disabled="busy || startLocked"
@@ -285,10 +292,11 @@ const eventColor: Record<string, string> = {
             v-else
             size="sm"
             variant="outline"
-            :disabled="busy || !model.managed"
+            :disabled="!model.managed || model.state === 'stopping'"
+            :title="model.state === 'failed' ? '終止殘留進程' : model.state === 'starting' ? '中止啟動' : '停止'"
             @click="control.request(model.key, 'stop')"
           >
-            <Loader2 v-if="busy" class="size-4 animate-spin" /><Square v-else class="size-4" />停止
+            <Loader2 v-if="busy" class="size-4 animate-spin" /><Square v-else class="size-4" />{{ model.state === 'failed' ? '終止' : '停止' }}
           </Button>
         </div>
       </div>
