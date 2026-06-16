@@ -9,6 +9,8 @@
 
 
 ![Model Management](assets/image2.png)
+![Model Management](assets/image3.png)
+![Model Management](assets/image4.png)
 
 </div>
 
