@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import { AlertTriangle, Check, Download, Loader2, Plus, Trash2, Wand2 } from '@lucide/vue'
+import { AlertTriangle, Check, Download, Loader2, Plus, Share2, Trash2, Wand2 } from '@lucide/vue'
 import Dialog from '@/components/ui/Dialog.vue'
 import Input from '@/components/ui/Input.vue'
 import Textarea from '@/components/ui/Textarea.vue'
@@ -13,7 +13,8 @@ import { useModelsStore } from '@/stores/models'
 import { useResourcesStore } from '@/stores/resources'
 import { formatBytes } from '@/lib/utils'
 import { ROUTING_STRATEGIES, routingStrategyLabel } from '@/lib/routingStrategies'
-import type { CachedModel, DownloadJob, LoraAdapter, LoraModule, SettingValue } from '@/types/api'
+import { KV_SHARE_PRESET, isKvShared } from '@/lib/kvSharing'
+import type { CachedModel, DownloadJob, KvTransferConfig, LoraAdapter, LoraModule, SettingValue } from '@/types/api'
 
 const open = defineModel<boolean>('open', { default: false })
 const props = defineProps<{ mode?: 'create' | 'edit'; editKey?: string | null }>()
@@ -43,6 +44,10 @@ const params = ref<{ key: string; value: string }[]>([])
 // list (the launcher would otherwise reject it as an unknown `vllm serve` arg).
 // '' = inherit the global default.
 const routingStrategy = ref('')
+// Cross-instance KV-cache sharing toggle. On = write the OffloadingConnector
+// preset into model_config; off = each instance keeps its own KV. Edited via a
+// switch, never the raw param list (kv_transfer_config is a nested object).
+const kvShared = ref(false)
 // LoRA adapters mounted at serve time; edited apart from the flat param list
 // because each is a {name, path, base_model_name} object, not a scalar flag.
 const loras = ref<LoraModule[]>([])
@@ -148,6 +153,7 @@ function reset() {
   modelTag.value = ''
   params.value = []
   routingStrategy.value = ''
+  kvShared.value = false
   loras.value = []
 }
 
@@ -190,8 +196,11 @@ function prefillForEdit() {
   cudaDevice.value = cfg.cuda_device ?? null
   modelTag.value = String(cfg.settings.model_tag ?? '')
   routingStrategy.value = String(cfg.settings.routing_strategy ?? '')
+  kvShared.value = isKvShared(cfg.settings)
   params.value = extractLoras(
-    Object.entries(cfg.settings).filter(([k2]) => k2 !== 'model_tag' && k2 !== 'routing_strategy'),
+    Object.entries(cfg.settings).filter(
+      ([k2]) => k2 !== 'model_tag' && k2 !== 'routing_strategy' && k2 !== 'kv_transfer_config',
+    ),
   ).map(([k2, v]) => ({ key: k2, value: v === null ? '' : String(v) }))
   warnings.value = []
   parsed.value = true // skip the paste/parse step
@@ -227,8 +236,11 @@ async function parse() {
     routingStrategy.value = String(
       (p.model_config as Record<string, unknown>).routing_strategy ?? '',
     )
+    kvShared.value = isKvShared(p.model_config as Record<string, unknown>)
     params.value = extractLoras(
-      Object.entries(p.model_config).filter(([k]) => k !== 'model_tag' && k !== 'routing_strategy'),
+      Object.entries(p.model_config).filter(
+        ([k]) => k !== 'model_tag' && k !== 'routing_strategy' && k !== 'kv_transfer_config',
+      ),
     ).map(([k, v]) => ({ key: k, value: String(v) }))
     warnings.value = p.warnings
     parsed.value = true
@@ -379,19 +391,26 @@ function applyAccelPreset(name: 'latency' | 'throughput') {
 async function submit() {
   if (!canSubmit.value || creating.value) return
   creating.value = true
-  const settings: Record<string, SettingValue> & { lora_modules?: LoraModule[] } = {
+  const settings: Record<string, SettingValue> & {
+    lora_modules?: LoraModule[]
+    kv_transfer_config?: KvTransferConfig
+  } = {
     model_tag: modelTag.value,
   }
   for (const { key: k, value } of params.value) {
-    // `lora_modules` and `routing_strategy` have dedicated editors below — never
-    // let a raw param (e.g. a stray "" from a null, or a leaked router key) stomp
-    // them via the generic param list.
+    // `lora_modules`, `routing_strategy` and `kv_transfer_config` have dedicated
+    // editors below — never let a raw param (e.g. a stray "" from a null, or a
+    // leaked key) stomp them via the generic param list.
     const kk = k.trim()
-    if (kk && kk !== 'lora_modules' && kk !== 'routing_strategy') settings[kk] = coerce(value)
+    if (kk && kk !== 'lora_modules' && kk !== 'routing_strategy' && kk !== 'kv_transfer_config')
+      settings[kk] = coerce(value)
   }
   // Router-only load-balancing policy; '' inherits the global default, so only
   // send it when explicitly chosen.
   if (routingStrategy.value) settings.routing_strategy = routingStrategy.value
+  // Cross-instance KV-cache sharing: write the OffloadingConnector preset when
+  // the toggle is on; otherwise leave it unset so each instance keeps its own KV.
+  if (kvShared.value) settings.kv_transfer_config = KV_SHARE_PRESET
   // Mounted adapters: keep only filled rows; drop the empty base_model_name field.
   const cleanLoras = loras.value
     .filter((l) => l.name.trim() && l.path.trim())
@@ -530,6 +549,21 @@ async function submit() {
             </select>
             <span class="mt-1 block text-[11px] text-muted-foreground">
               此群組請求的分流方式;留空則跟隨全域設定（可在「流量」頁切換）。多副本才有效。
+            </span>
+          </label>
+          <label
+            class="col-span-2 flex cursor-pointer items-start gap-3 rounded-lg border border-input bg-background/40 px-3 py-2.5"
+            :class="kvShared && 'border-[var(--chart-1)]/50 bg-[var(--chart-1)]/5'"
+          >
+            <input v-model="kvShared" type="checkbox" class="mt-0.5 size-4 accent-[var(--chart-1)]" />
+            <span class="min-w-0">
+              <span class="flex items-center gap-1.5 text-sm font-medium">
+                <Share2 class="size-3.5 text-[var(--chart-1)]" />共用 KV Cache（跨 instance）
+              </span>
+              <span class="mt-0.5 block text-[11px] text-muted-foreground">
+                同群組各副本透過共享 store（/kv_cache）重用彼此算過的 KV，相同前綴不必重算。
+                多副本 + 高前綴重複率（固定 system prompt / RAG / 多輪對話）效益最大；關閉則各副本各自獨立 KV。
+              </span>
             </span>
           </label>
         </div>

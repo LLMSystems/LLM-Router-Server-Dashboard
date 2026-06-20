@@ -4,11 +4,13 @@ import { VueFlow, useVueFlow, Handle, Position, type Edge, type Node } from '@vu
 import { Background } from '@vue-flow/background'
 import '@vue-flow/core/dist/style.css'
 import '@vue-flow/core/dist/theme-default.css'
+import { Database, Share2, Unlink } from '@lucide/vue'
 import { useTrafficStore } from '@/stores/traffic'
 import { useModelsStore } from '@/stores/models'
 import StatusDot from '@/components/StatusDot.vue'
 import Badge from '@/components/ui/Badge.vue'
 import { formatPercent } from '@/lib/utils'
+import { isKvShared } from '@/lib/kvSharing'
 import type { InstanceMetrics, ModelState, ModelView } from '@/types/api'
 
 const props = defineProps<{ group: string }>()
@@ -31,6 +33,13 @@ interface NodeData {
 
 const instances = computed(() => models.models.filter((m) => m.key.split('::')[0] === props.group))
 const readyCount = computed(() => instances.value.filter((m) => m.state === 'ready').length)
+// Cross-instance KV sharing for this group (drives the badge + shared-store node).
+// ConfigSummary.LLM_engines is keyed by `group::instance`, so look up via any
+// instance key of this group (all instances share the group's model_config).
+const kvShared = computed(() => {
+  const key = instances.value[0]?.key
+  return isKvShared(key ? models.config?.LLM_engines?.[key]?.settings : null)
+})
 const live = computed(() =>
   instances.value.some((m) => m.state === 'ready' || m.state === 'starting'),
 )
@@ -65,7 +74,7 @@ const nodes = ref<Node[]>([])
 const edges = ref<Edge[]>([])
 
 watch(
-  [instances, () => traffic.metrics, shareByInst],
+  [instances, () => traffic.metrics, shareByInst, kvShared],
   () => {
     const insts = instances.value
     const n = insts.length
@@ -136,6 +145,32 @@ watch(
       })
     })
 
+    // Shared KV-cache store: when the group shares KV, draw one store below the
+    // instances with a dashed link from each serving instance — visualising that
+    // they pool prefixes into /kv_cache instead of each keeping its own.
+    if (kvShared.value) {
+      const KW = 150
+      nextNodes.push({
+        id: '__kvstore__',
+        type: 'kvstore',
+        position: { x: rowWidth / 2 - KW / 2, y: 340 },
+        data: {},
+        draggable: false,
+        selectable: false,
+      })
+      insts.forEach((m) => {
+        if (m.state !== 'ready' && m.state !== 'starting') return
+        const id = instId(m)
+        nextEdges.push({
+          id: `kv-${id}`,
+          source: id,
+          target: '__kvstore__',
+          animated: false,
+          style: { stroke: 'var(--chart-4)', strokeWidth: 1.4, strokeDasharray: '4 4', opacity: 0.6 },
+        })
+      })
+    }
+
     nodes.value = nextNodes
     edges.value = nextEdges
     // Re-fit after the DOM updates so state changes (which alter node heights)
@@ -155,6 +190,13 @@ watch(
     <StatusDot state="stopped" />
     <span class="text-sm font-medium">{{ group }}</span>
     <Badge variant="muted">{{ instances.length }} instances</Badge>
+    <span
+      class="flex items-center gap-1 text-[11px]"
+      :class="kvShared ? 'text-[var(--chart-4)]' : 'text-muted-foreground/70'"
+      :title="kvShared ? '此群組各副本共用 KV cache（/kv_cache）' : '各副本各自獨立 KV cache'"
+    >
+      <component :is="kvShared ? Share2 : Unlink" class="size-3" />{{ kvShared ? '共用 KV' : '各自 KV' }}
+    </span>
     <span class="ml-auto text-xs text-muted-foreground">idle — no instance running</span>
   </div>
 
@@ -163,6 +205,13 @@ watch(
     <div class="flex items-center gap-2 px-3 pt-3">
       <span class="text-sm font-medium">{{ group }}</span>
       <Badge variant="ready" class="tabular">{{ readyCount }}/{{ instances.length }} ready</Badge>
+      <span
+        class="flex items-center gap-1 text-[11px]"
+        :class="kvShared ? 'text-[var(--chart-4)]' : 'text-muted-foreground/70'"
+        :title="kvShared ? '此群組各副本共用 KV cache（/kv_cache）' : '各副本各自獨立 KV cache'"
+      >
+        <component :is="kvShared ? Share2 : Unlink" class="size-3" />{{ kvShared ? '共用 KV' : '各自 KV' }}
+      </span>
     </div>
     <div class="h-[260px] w-full">
       <VueFlow
@@ -208,6 +257,7 @@ watch(
             :style="{ width: `${NODE_W}px` }"
           >
             <Handle type="target" :position="Position.Top" />
+            <Handle type="source" :position="Position.Bottom" />
             <div class="flex items-center justify-center gap-1.5">
               <StatusDot :state="data.state" size="sm" />
               <span class="font-mono text-[13px] font-semibold">{{ data.id }}</span>
@@ -225,6 +275,16 @@ watch(
               </p>
             </template>
             <p v-else class="mt-1 text-[11px] capitalize text-muted-foreground/70">{{ data.state }}</p>
+          </div>
+        </template>
+
+        <!-- Shared KV-cache store (only present when the group shares KV) -->
+        <template #node-kvstore>
+          <div
+            class="flex items-center gap-1.5 rounded-lg border border-dashed border-[var(--chart-4)]/60 bg-[var(--chart-4)]/5 px-3 py-1.5 text-[11px] font-medium text-[var(--chart-4)]"
+          >
+            <Handle type="target" :position="Position.Top" />
+            <Database class="size-3.5" />共用 KV Cache · /kv_cache
           </div>
         </template>
       </VueFlow>

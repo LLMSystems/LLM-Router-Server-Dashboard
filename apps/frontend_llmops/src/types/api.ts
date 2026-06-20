@@ -136,6 +136,7 @@ export interface ConfigSummary {
       /** Full vLLM model_config: declared fields + any extra flags. */
       settings: Record<string, string | number | boolean | null> & {
         lora_modules?: LoraModule[]
+        kv_transfer_config?: KvTransferConfig | null
       }
     }
   >
@@ -561,6 +562,13 @@ export interface EvalRequest {
 
 export type SettingValue = string | number | boolean | null
 
+/** vLLM `--kv-transfer-config` payload for cross-instance KV-cache sharing. */
+export interface KvTransferConfig {
+  kv_connector: string
+  kv_role?: string
+  kv_connector_extra_config?: Record<string, unknown>
+}
+
 export interface ParsedModel {
   group: string
   instance: { id: string; host: string; port: number; cuda_device: number | null }
@@ -572,5 +580,8 @@ export interface ParsedModel {
 export interface CreateModelPayload {
   group: string
   instance: { id: string; host: string; port: number; cuda_device: number | null }
-  settings: Record<string, SettingValue> & { lora_modules?: LoraModule[] }
+  settings: Record<string, SettingValue> & {
+    lora_modules?: LoraModule[]
+    kv_transfer_config?: KvTransferConfig
+  }
 }

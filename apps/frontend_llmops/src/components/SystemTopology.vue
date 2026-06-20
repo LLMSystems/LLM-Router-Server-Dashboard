@@ -9,13 +9,14 @@ import '@vue-flow/core/dist/style.css'
 import '@vue-flow/core/dist/theme-default.css'
 import '@vue-flow/controls/dist/style.css'
 import '@vue-flow/minimap/dist/style.css'
-import { Box, Cpu, Layers, Server, Settings2, Sparkles, Users } from '@lucide/vue'
+import { Box, Cpu, Layers, Server, Settings2, Share2, Sparkles, Users } from '@lucide/vue'
 import { useModelsStore } from '@/stores/models'
 import { useResourcesStore } from '@/stores/resources'
 import { useTrafficStore } from '@/stores/traffic'
 import { lorasOfGroup } from '@/composables/useModelOptions'
 import StatusDot from '@/components/StatusDot.vue'
 import { formatNumber, formatPercent } from '@/lib/utils'
+import { isKvShared } from '@/lib/kvSharing'
 import type { ModelState } from '@/types/api'
 
 const models = useModelsStore()
@@ -87,6 +88,7 @@ interface GroupAgg {
   share: number
   gpus: number[]
   loras: string[] // served names of adapters mounted on this group
+  kvShared: boolean // group's instances share a cross-instance KV cache
 }
 
 const groups = computed<GroupAgg[]>(() => {
@@ -100,7 +102,7 @@ const groups = computed<GroupAgg[]>(() => {
     const inst = m.key.split('::')[1] ?? ''
     const agg =
       byGroup.get(g) ??
-      ({ group: g, ready: 0, total: 0, worst: 'stopped', running: 0, waiting: 0, share: 0, gpus: [], loras: [] } as GroupAgg)
+      ({ group: g, ready: 0, total: 0, worst: 'stopped', running: 0, waiting: 0, share: 0, gpus: [], loras: [], kvShared: false } as GroupAgg)
     agg.total++
     if (m.state === 'ready') agg.ready++
     const gpu = models.gpuForKey(m.key, m.kind)
@@ -124,6 +126,10 @@ const groups = computed<GroupAgg[]>(() => {
           : 'stopped'
     agg.share = reqTotal ? (reqByGroup[g] ?? 0) / reqTotal : 0
     agg.loras = lorasOfGroup(models, g).map((l) => l.name)
+    // ConfigSummary.LLM_engines is keyed by `group::instance`; look up via any
+    // instance key of the group (instances share the group's model_config).
+    const cfgKey = models.llms.find((m) => m.key.split('::')[0] === g)?.key
+    agg.kvShared = isKvShared(cfgKey ? models.config?.LLM_engines?.[cfgKey]?.settings : null)
   }
   return [...byGroup.values()]
 })
@@ -461,6 +467,13 @@ function miniColor(node: Node) {
             </p>
             <p v-if="data.loras?.length" class="flex items-center gap-1 text-[10px] text-[var(--chart-3)]">
               <Layers class="size-3" />{{ data.loras.length }} LoRA
+            </p>
+            <p
+              v-if="data.kvShared"
+              class="flex items-center gap-1 text-[10px] text-[var(--chart-4)]"
+              title="此群組各副本共用 KV cache（/kv_cache）"
+            >
+              <Share2 class="size-3" />共用 KV cache
             </p>
           </div>
         </template>
