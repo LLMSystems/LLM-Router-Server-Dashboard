@@ -106,7 +106,7 @@
         },
         "enable": true,
         "iconColor": "orange",
-        "expr": "changes(process_start_time_seconds{job=\"vllm\"}[$__rate_interval]) > 0",
+        "expr": "changes(process_start_time_seconds{job=\"vllm\"}[5m]) > 0",
         "step": "60s",
         "titleFormat": "vLLM (re)start",
         "textFormat": "{{instance}}",
