@@ -290,6 +290,7 @@ export interface DatasetDownloadJob {
   error: string | null
   started_at: number
   updated_at: number
+  warming?: boolean
 }
 
 export type DownloadState = 'pending' | 'downloading' | 'completed' | 'failed'
@@ -413,6 +414,19 @@ export interface PerfRequest {
 }
 
 // ---- Accuracy / quality evaluation (evalscope run_task) ----
+/** Per-benchmark detail from evalscope's registry (subsets / metric / tags …). */
+export interface EvalDatasetMeta {
+  subsets: string[]
+  default_subset: string
+  few_shot_num: number
+  eval_split?: string | null
+  metric: string[]
+  tags: string[]
+  pretty_name?: string | null
+  description?: string
+  paper_url?: string | null
+}
+
 export interface EvalDataset {
   key: string
   label: string
@@ -424,6 +438,26 @@ export interface EvalDataset {
   needs_judge?: boolean
   long_context?: boolean
   needs_tool_parser?: boolean
+  meta?: EvalDatasetMeta | null
+}
+
+/** One normalised preview row from a dataset subset. */
+export interface EvalPreviewRow {
+  question: string
+  choices: string[]
+  target: unknown
+  metadata: Record<string, unknown>
+}
+export interface EvalDatasetPreview {
+  subset: string
+  count: number
+  rows: EvalPreviewRow[]
+  truncated: boolean
+  pretty_name?: string | null
+  description?: string | null
+  tags?: string[]
+  metric?: string[]
+  subsets?: string[]
 }
 
 export interface EvalMetricScore {

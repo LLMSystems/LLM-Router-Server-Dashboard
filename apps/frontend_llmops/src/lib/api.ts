@@ -9,6 +9,7 @@ import type {
   DownloadJob,
   EvalConfig,
   EvalDataset,
+  EvalDatasetPreview,
   EvalListResponse,
   EvalReportDataset,
   EvalRequest,
@@ -274,6 +275,11 @@ export const api = {
 
   // ---- Accuracy / quality evaluation (eval) ---------------------------------
   listEvalDatasets: () => request<{ datasets: EvalDataset[] }>(API_BASE, '/api/eval/datasets'),
+  getEvalDatasetPreview: (key: string, subset?: string, n = 20) => {
+    const p = new URLSearchParams({ n: String(n) })
+    if (subset) p.set('subset', subset)
+    return request<EvalDatasetPreview>(API_BASE, `/api/eval/datasets/${key}/preview?${p.toString()}`)
+  },
   listEval: () => request<EvalListResponse>(API_BASE, '/api/eval'),
   getEvalConfig: () => request<EvalConfig>(API_BASE, '/api/eval/config'),
   setEvalConfig: (concurrency_budget: number) =>

@@ -1,17 +1,19 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { Download, Gauge, GraduationCap, Loader2, Trash2 } from '@lucide/vue'
+import { Download, Eye, Gauge, GraduationCap, Loader2, Trash2 } from '@lucide/vue'
 import { formatBytes } from '@/lib/utils'
 import type { DatasetDownloadJob, DatasetEntry } from '@/types/api'
 import Button from '@/components/ui/Button.vue'
 import Badge from '@/components/ui/Badge.vue'
 
 const props = defineProps<{ entry: DatasetEntry; job?: DatasetDownloadJob }>()
-defineEmits<{ download: []; remove: [] }>()
+defineEmits<{ download: []; remove: []; preview: [] }>()
 
 const downloading = computed(
   () => !!props.job && (props.job.state === 'pending' || props.job.state === 'downloading'),
 )
+// Post-download evalscope cache warm still running — preview isn't fast yet.
+const warming = computed(() => !!props.job && props.job.state === 'completed' && !!props.job.warming)
 const subtitle = computed(() =>
   props.entry.file ? `${props.entry.dataset_id}/${props.entry.file}` : props.entry.dataset_id,
 )
@@ -50,9 +52,23 @@ const accent = computed(() => (props.entry.category === 'perf' ? 'var(--chart-2)
           <Loader2 class="size-3.5 animate-spin" />
           <span class="tabular">{{ formatBytes(job!.downloaded_bytes) }}</span>
         </span>
-        <Button v-else-if="entry.cached" size="icon-sm" variant="ghost" title="刪除快取" @click="$emit('remove')">
-          <Trash2 class="size-4" />
-        </Button>
+        <span v-else-if="warming" class="flex items-center gap-1.5 text-xs text-muted-foreground" title="正在建立快取，完成後預覽即可秒開">
+          <Loader2 class="size-3.5 animate-spin" />預熱中…
+        </span>
+        <template v-else-if="entry.cached">
+          <Button
+            v-if="entry.category === 'eval'"
+            size="icon-sm"
+            variant="ghost"
+            title="預覽資料"
+            @click="$emit('preview')"
+          >
+            <Eye class="size-4" />
+          </Button>
+          <Button size="icon-sm" variant="ghost" title="刪除快取" @click="$emit('remove')">
+            <Trash2 class="size-4" />
+          </Button>
+        </template>
         <Button v-else size="sm" variant="outline" @click="$emit('download')">
           <Download class="size-3.5" />下載
         </Button>

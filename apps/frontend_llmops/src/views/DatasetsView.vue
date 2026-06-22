@@ -9,8 +9,17 @@ import type { DatasetCacheInfo, DatasetDownloadJob, DatasetEntry } from '@/types
 import Card from '@/components/ui/Card.vue'
 import StatCard from '@/components/StatCard.vue'
 import DatasetCard from '@/components/DatasetCard.vue'
+import DatasetPreviewDialog from '@/components/DatasetPreviewDialog.vue'
 
 const { ensureUnlocked } = useAuth()
+
+// Dataset preview (eval datasets only) — reuses the Eval page's inspector dialog.
+const previewOpen = ref(false)
+const previewKey = ref('')
+function openPreview(key: string) {
+  previewKey.value = key
+  previewOpen.value = true
+}
 
 const cache = ref<DatasetCacheInfo | null>(null)
 const downloads = ref<DatasetDownloadJob[]>([])
@@ -150,6 +159,7 @@ onBeforeUnmount(() => {
               :job="jobsByKey[d.key]"
               @download="download(d.key)"
               @remove="remove(d.key, d.label)"
+              @preview="openPreview(d.key)"
             />
           </div>
         </div>
@@ -160,5 +170,7 @@ onBeforeUnmount(() => {
     <Card v-for="job in downloads.filter((j) => j.state === 'failed')" :key="job.key" class="p-3">
       <p class="text-xs text-status-failed">下載「{{ job.label }}」失敗：{{ job.error }}</p>
     </Card>
+
+    <DatasetPreviewDialog v-model:open="previewOpen" :dataset-key="previewKey" />
   </div>
 </template>

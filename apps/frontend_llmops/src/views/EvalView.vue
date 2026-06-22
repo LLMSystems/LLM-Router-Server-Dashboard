@@ -76,6 +76,8 @@ watch(selectedModels, () => {
 // ---- dataset catalog (grouped by tier) + cached state ----
 const catalog = ref<EvalDataset[]>([])
 const cachedKeys = ref<Set<string>>(new Set())
+// Datasets with an in-flight download — not selectable until they finish.
+const downloadingKeys = ref<Set<string>>(new Set())
 const selected = ref<Set<string>>(new Set())
 const tiers = computed(() => {
   const out: { tier: string; items: EvalDataset[] }[] = []
@@ -87,15 +89,17 @@ const tiers = computed(() => {
   return out
 })
 function toggleDataset(key: string) {
+  if (downloadingKeys.value.has(key)) return // still downloading — not ready
   const s = new Set(selected.value)
   if (s.has(key)) s.delete(key)
   else s.add(key)
   selected.value = s
 }
 function toggleTier(items: EvalDataset[]) {
+  const pickable = items.filter((d) => !downloadingKeys.value.has(d.key))
   const s = new Set(selected.value)
-  const allOn = items.every((d) => s.has(d.key))
-  for (const d of items) {
+  const allOn = pickable.every((d) => s.has(d.key))
+  for (const d of pickable) {
     if (allOn) s.delete(d.key)
     else s.add(d.key)
   }
@@ -122,14 +126,33 @@ const toolParserSelected = computed(() =>
   [...selected.value].some((k) => catalog.value.find((d) => d.key === k)?.needs_tool_parser),
 )
 
+// ---- per-dataset subset (subject) selection ----
+// key -> chosen subset names. Empty = evalscope's default (all subsets).
+const subsetSel = ref<Record<string, string[]>>({})
+const selectedDatasets = computed(() => catalog.value.filter((d) => selected.value.has(d.key)))
+function toggleSubset(key: string, sub: string) {
+  const cur = new Set(subsetSel.value[key] ?? [])
+  if (cur.has(sub)) cur.delete(sub)
+  else cur.add(sub)
+  subsetSel.value = { ...subsetSel.value, [key]: [...cur] }
+}
+function clearSubsets(key: string) {
+  const next = { ...subsetSel.value }
+  delete next[key]
+  subsetSel.value = next
+}
+
 // ---- advanced (dataset_args) ----
 const fewShot = ref(0) // 0 = dataset default
 const datasetArgsJson = ref('') // raw per-dataset overrides (advanced)
 const showAdvanced = ref(false)
-// Build TaskConfig.dataset_args from the few-shot convenience + raw JSON override.
+// Build TaskConfig.dataset_args from few-shot + subset picks + raw JSON override.
 function buildDatasetArgs(): Record<string, Record<string, unknown>> | undefined {
   const da: Record<string, Record<string, unknown>> = {}
   if (fewShot.value > 0) for (const k of selected.value) da[k] = { few_shot_num: fewShot.value }
+  for (const [k, subs] of Object.entries(subsetSel.value)) {
+    if (selected.value.has(k) && subs.length) da[k] = { ...da[k], subset_list: subs }
+  }
   if (datasetArgsJson.value.trim()) {
     const custom = JSON.parse(datasetArgsJson.value) as Record<string, Record<string, unknown>>
     for (const [k, v] of Object.entries(custom)) da[k] = { ...da[k], ...v }
@@ -157,11 +180,30 @@ async function loadCatalog() {
   } catch (e) {
     toast.error('無法讀取評測資料集', { description: String(e) })
   }
+  await refreshDatasetState()
+}
+
+// Refresh cached + in-flight-download state (polled, so a chip unlocks the moment
+// its download finishes). A dataset mid-download is auto-deselected — it's not
+// ready to evaluate.
+async function refreshDatasetState() {
   try {
     const cache = await api.getDatasets()
     cachedKeys.value = new Set(cache.datasets.filter((d) => d.cached).map((d) => d.key))
   } catch {
     /* non-fatal: cached badges just won't show */
+  }
+  try {
+    const jobs = await api.listDatasetDownloads()
+    const dl = new Set(
+      jobs.filter((j) => j.state === 'pending' || j.state === 'downloading').map((j) => j.key),
+    )
+    downloadingKeys.value = dl
+    if ([...selected.value].some((k) => dl.has(k))) {
+      selected.value = new Set([...selected.value].filter((k) => !dl.has(k)))
+    }
+  } catch {
+    /* non-fatal */
   }
 }
 
@@ -437,6 +479,7 @@ onMounted(() => {
   void loadRuns()
   poll = setInterval(() => {
     void loadRuns()
+    if (downloadingKeys.value.size) void refreshDatasetState()
     if (selectedRunning.value) void loadLog()
   }, 2500)
 })
@@ -543,20 +586,24 @@ const STATUS_VARIANT: Record<string, 'default' | 'secondary' | 'outline'> = {
               <button
                 v-for="d in t.items"
                 :key="d.key"
-                class="rounded-md border px-2 py-1 text-xs transition-colors"
+                class="rounded-md border px-2 py-1 text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-50"
                 :class="selected.has(d.key)
                   ? 'border-[var(--chart-1)] bg-[var(--chart-1)]/10 text-foreground'
                   : 'border-border text-muted-foreground hover:bg-muted'"
-                :title="d.note ? `${d.dataset_id} · ${d.note}` : d.dataset_id"
+                :disabled="downloadingKeys.has(d.key)"
+                :title="downloadingKeys.has(d.key)
+                  ? `${d.dataset_id}（下載中，完成後才可選用）`
+                  : (d.note ? `${d.dataset_id} · ${d.note}` : d.dataset_id)"
                 @click="toggleDataset(d.key)"
               >
                 {{ d.label }}
                 <span v-if="d.needs_judge" class="ml-1 text-amber-500" title="需裁判模型">⚖</span>
-                <span v-if="cachedKeys.has(d.key)" class="ml-1 text-[var(--chart-1)]">●</span>
+                <span v-if="downloadingKeys.has(d.key)" class="ml-1 text-muted-foreground">⏬下載中</span>
+                <span v-else-if="cachedKeys.has(d.key)" class="ml-1 text-[var(--chart-1)]">●</span>
               </button>
             </div>
           </div>
-          <p class="text-[10px] text-muted-foreground">● = 已快取，未快取的會在執行時下載。⚖ = 需裁判模型評分。</p>
+          <p class="text-[10px] text-muted-foreground">● = 已快取，未快取的會在執行時下載；⏬下載中的需等完成才可選。⚖ = 需裁判模型評分。</p>
           <p
             v-if="longContextSelected"
             class="rounded-md bg-amber-500/10 px-2 py-1.5 text-[11px] text-amber-600"
@@ -569,6 +616,52 @@ const STATUS_VARIANT: Record<string, 'default' | 'secondary' | 'outline'> = {
           >
             ⚠ 已選真實函數調用資料集，需模型啟用 vLLM tool parser（<span class="font-mono">enable_auto_tool_choice</span> + <span class="font-mono">tool_call_parser</span>），否則分數恆為 0。
           </p>
+        </div>
+
+        <!-- Selected dataset details: subjects (subset) picker -->
+        <div v-if="selectedDatasets.length" class="space-y-2">
+          <label class="text-xs font-medium text-muted-foreground">已選資料集 — 主題</label>
+          <div
+            v-for="d in selectedDatasets"
+            :key="d.key"
+            class="space-y-2 rounded-md border border-border/60 p-2.5"
+          >
+            <div class="flex flex-wrap items-center gap-1.5">
+              <span class="text-xs font-medium">{{ d.label }}</span>
+              <Badge v-for="t in d.meta?.tags ?? []" :key="t" variant="muted" class="text-[10px]">{{ t }}</Badge>
+              <span v-if="d.meta?.metric?.length" class="text-[10px] text-muted-foreground">· {{ d.meta.metric.join(', ') }}</span>
+              <span v-if="d.meta && d.meta.few_shot_num > 0" class="text-[10px] text-muted-foreground">· 預設 {{ d.meta.few_shot_num }}-shot</span>
+            </div>
+            <p v-if="d.meta?.description" class="line-clamp-2 text-[10px] text-muted-foreground/80">
+              {{ d.meta.description }}
+            </p>
+            <!-- subjects / subsets (only when there's more than one to choose) -->
+            <div v-if="(d.meta?.subsets?.length ?? 0) > 1" class="space-y-1">
+              <div class="flex items-center gap-2">
+                <span class="text-[10px] text-muted-foreground">主題（subset，{{ d.meta!.subsets.length }} 個，不選=全部）</span>
+                <button
+                  v-if="(subsetSel[d.key]?.length ?? 0) > 0"
+                  class="text-[10px] text-[var(--chart-1)] hover:underline"
+                  @click="clearSubsets(d.key)"
+                >
+                  清除（{{ subsetSel[d.key]!.length }}）
+                </button>
+              </div>
+              <div class="flex max-h-24 flex-wrap gap-1 overflow-y-auto">
+                <button
+                  v-for="sub in d.meta!.subsets"
+                  :key="sub"
+                  class="rounded border px-1.5 py-0.5 font-mono text-[10px] transition-colors"
+                  :class="(subsetSel[d.key] ?? []).includes(sub)
+                    ? 'border-[var(--chart-1)] bg-[var(--chart-1)]/10 text-foreground'
+                    : 'border-border text-muted-foreground hover:bg-muted'"
+                  @click="toggleSubset(d.key, sub)"
+                >
+                  {{ sub }}
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
 
         <!-- Params -->
@@ -879,5 +972,6 @@ const STATUS_VARIANT: Record<string, 'default' | 'secondary' | 'outline'> = {
         </div>
       </div>
     </div>
+
   </div>
 </template>
