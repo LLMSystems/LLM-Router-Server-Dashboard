@@ -17,6 +17,12 @@ const resources = useResourcesStore()
 const { isDark, toggle } = useTheme()
 
 const title = computed(() => t('sidebar.' + ((route.meta.title as string) ?? 'overview')))
+const languageTitle = computed(() =>
+  currentLocale() === 'en' ? t('statusBar.switchToChinese') : t('statusBar.switchToEnglish'),
+)
+const updatedTitle = computed(() =>
+  models.lastUpdated ? t('statusBar.updatedAgo', { ago: timeAgo(models.lastUpdated / 1000) }) : '',
+)
 
 const connMeta = computed(() => {
   switch (models.conn) {
@@ -47,7 +53,7 @@ function toggleLocale() {
       <div
         v-if="resources.resources?.gpus.length"
         class="hidden items-center gap-2 rounded-md border border-border/60 bg-background/40 px-2.5 py-1 sm:flex"
-        title="Average GPU utilization"
+        :title="$t('statusBar.gpuUtilTitle')"
       >
         <span class="text-xs text-muted-foreground">{{ $t('statusBar.gpu') }}</span>
         <div class="h-1.5 w-16 overflow-hidden rounded-full bg-muted">
@@ -71,7 +77,7 @@ function toggleLocale() {
       <!-- Connection state -->
       <div
         class="flex items-center gap-1.5 rounded-md border border-border/60 bg-background/40 px-2.5 py-1 text-xs"
-        :title="models.lastUpdated ? `Updated ${timeAgo(models.lastUpdated / 1000)}` : ''"
+        :title="updatedTitle"
       >
         <component :is="connMeta.icon" class="size-3.5" :class="connMeta.cls" />
         <span :class="connMeta.cls">{{ connMeta.label }}</span>
@@ -84,7 +90,7 @@ function toggleLocale() {
       </Button>
 
       <!-- Language toggle -->
-      <Button variant="ghost" size="icon-sm" :title="currentLocale() === 'en' ? '切換至中文' : 'Switch to English'" @click="toggleLocale">
+      <Button variant="ghost" size="icon-sm" :title="languageTitle" @click="toggleLocale">
         <Languages class="size-4" />
       </Button>
     </div>

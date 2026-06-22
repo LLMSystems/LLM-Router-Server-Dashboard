@@ -166,7 +166,7 @@ function codeVariant(code: number) {
                 <th class="pb-2 pr-4 font-medium">{{ $t('overview.tablePath') }}</th>
                 <th class="pb-2 pr-4 font-medium">{{ $t('overview.tableStatus') }}</th>
                 <th class="pb-2 pr-4 text-right font-medium">{{ $t('overview.tableLatency') }}</th>
-                <th class="pb-2 text-right font-medium">Tokens</th>
+                <th class="pb-2 text-right font-medium">{{ $t('common.tokens') }}</th>
               </tr>
             </thead>
             <tbody>

@@ -6,6 +6,7 @@ const STORAGE_KEY = 'llmops-locale'
 
 const i18n = createI18n({
   legacy: false,
+  globalInjection: true,
   locale: localStorage.getItem(STORAGE_KEY) || 'en',
   fallbackLocale: 'en',
   messages: { en, 'zh-TW': zhTW },

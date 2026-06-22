@@ -108,7 +108,7 @@ function onFilter(e: Event) {
                 <th class="pb-2 pr-4 text-right font-medium">{{ $t('traffic.tableAvg') }}</th>
                 <th class="pb-2 pr-4 text-right font-medium">p50</th>
                 <th class="pb-2 pr-4 font-medium">p95</th>
-                <th class="pb-2 text-right font-medium">Tokens</th>
+                <th class="pb-2 text-right font-medium">{{ $t('common.tokens') }}</th>
               </tr>
             </thead>
             <tbody>
@@ -242,7 +242,7 @@ function onFilter(e: Event) {
                 <th class="pb-2 pr-3 font-medium">{{ $t('common.path') }}</th>
                 <th class="pb-2 pr-3 font-medium">{{ $t('common.status') }}</th>
                 <th class="pb-2 pr-3 text-right font-medium">{{ $t('common.latency') }}</th>
-                <th class="pb-2 text-right font-medium">Tok</th>
+                <th class="pb-2 text-right font-medium">{{ $t('common.tokens') }}</th>
               </tr>
             </thead>
             <tbody>

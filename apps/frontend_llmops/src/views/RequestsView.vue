@@ -87,7 +87,7 @@ onMounted(load)
         <input v-model="errorsOnly" type="checkbox" class="size-4 accent-[var(--chart-1)]" />{{ $t('requests.errorsOnly') }}
       </label>
       <label class="flex items-center gap-1.5 text-sm text-muted-foreground">
-        $/1M tokens
+        {{ $t('requests.costPerMTok') }}
         <Input
           :model-value="ratePerMTok"
           type="number"
@@ -146,7 +146,7 @@ onMounted(load)
               <th>{{ $t('requests.tablePath') }}</th>
               <th class="text-right">{{ $t('requests.tableStatus') }}</th>
               <th class="text-right">{{ $t('requests.tableLatency') }}</th>
-              <th class="text-right">tokens</th>
+              <th class="text-right">{{ $t('requests.tableTokens') }}</th>
               <th class="text-right">{{ $t('requests.tableCost') }}</th>
               <th>{{ $t('requests.tableKey') }}</th>
             </tr>
