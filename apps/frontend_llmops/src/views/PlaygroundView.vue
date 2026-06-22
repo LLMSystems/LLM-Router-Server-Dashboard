@@ -619,7 +619,7 @@ watch(
                 <Input v-model="rerankQuery" placeholder="留空則為純嵌入模式" class="mt-1" />
               </label>
               <label class="block">
-                <span class="text-xs text-muted-foreground">輸入（每行一筆）</span>
+                <span class="text-xs text-muted-foreground">{{ $t('playground.inputLabel') }}</span>
                 <Textarea v-model="embInput" class="mt-1 min-h-[140px] font-mono text-xs" />
               </label>
               <Button :disabled="embBusy || !embModel" @click="runEmbedding">
