@@ -229,6 +229,16 @@ async def _proxy_to_backend(request: Request, upstream_path: str, api_key_name=N
         resolved = resolve_model(config, requested)
         if not resolved:
             raise HTTPException(status_code=404, detail=f"Model '{requested}' not found.")
+        # Guard the generate endpoints against a pooling group (the pooling
+        # endpoints validate kind themselves in _dispatch_pooling): a kind!=chat
+        # group has no chat/completions.
+        if upstream_path in ("/v1/chat/completions", "/v1/completions") \
+                and resolved.get("kind", "chat") != "chat":
+            raise HTTPException(
+                status_code=404,
+                detail=f"Model '{requested}' is a pooling model (kind={resolved['kind']}); "
+                       f"use /v1/embeddings or /v1/rerank.",
+            )
         model_key = resolved["route_key"]
         model_cfg = resolved["model_cfg"]
         request_json["model"] = resolved["forward_name"]
@@ -495,19 +505,52 @@ async def _proxy_to_embedding_server(request: Request, upstream_path: str, key_n
         )
 
 
+async def _dispatch_pooling(request: Request, upstream_path: str, expected_kind: str, key_name):
+    """Route a pooling request (embeddings / rerank / score) to its upstream.
+
+    Two kinds of upstream can serve these endpoints:
+      - a vLLM pooling group in LLM_engines (model_config.kind == embed|rerank),
+        managed exactly like an LLM group -> full _proxy_to_backend machinery
+        (load-aware instance selection, failover, metrics, usage logging);
+      - the bespoke lightweight embedding server (its own process, routes by
+        model key internally) -> the straight _proxy_to_embedding_server path.
+
+    We peek the requested `model`: if it names an LLM_engines group we require
+    its kind to match this endpoint (else 404 — e.g. an embed model on
+    /v1/rerank); anything not in LLM_engines falls through to the bespoke
+    server, which is left entirely unchanged.
+    """
+    config = request.app.state.config
+    try:
+        requested = (json.loads(await request.body()) or {}).get("model")
+    except Exception:
+        requested = None
+
+    resolved = resolve_model(config, requested) if requested else None
+    if resolved is not None:
+        kind = resolved.get("kind", "chat")
+        if kind == expected_kind:
+            return await _proxy_to_backend(request, upstream_path, api_key_name=key_name)
+        raise HTTPException(
+            status_code=404,
+            detail=f"Model '{requested}' does not serve {upstream_path} (kind={kind}).",
+        )
+    return await _proxy_to_embedding_server(request, upstream_path, key_name)
+
+
 @router.post("/v1/embeddings")
 async def proxy_embeddings(request: Request):
     key_name = await authenticate(request)
-    return await _proxy_to_embedding_server(request, "/v1/embeddings", key_name)
+    return await _dispatch_pooling(request, "/v1/embeddings", "embed", key_name)
 
 
 @router.post("/v1/rerank")
 async def proxy_rerank(request: Request):
     key_name = await authenticate(request)
-    return await _proxy_to_embedding_server(request, "/v1/rerank", key_name)
+    return await _dispatch_pooling(request, "/v1/rerank", "rerank", key_name)
 
 
 @router.post("/v1/score")
 async def proxy_score(request: Request):
     key_name = await authenticate(request)
-    return await _proxy_to_embedding_server(request, "/v1/score", key_name)
+    return await _dispatch_pooling(request, "/v1/score", "rerank", key_name)

@@ -22,6 +22,15 @@ def _lora_modules(engine: dict) -> list[dict]:
     return [m for m in mods if isinstance(m, dict) and m.get("name")]
 
 
+def engine_kind(engine: dict) -> str:
+    """Router-facing endpoint kind of a group: chat | embed | rerank.
+
+    Defaults to 'chat' so existing generate groups need no config change. A
+    vLLM pooling model declares `model_config.kind: embed|rerank`.
+    """
+    return (engine.get("model_config") or {}).get("kind") or "chat"
+
+
 def resolve_model(config: dict, requested: str) -> Optional[dict]:
     """Resolve a requested model name.
 
@@ -30,6 +39,7 @@ def resolve_model(config: dict, requested: str) -> Optional[dict]:
       - model_cfg:    that group's config entry (instances + model_config)
       - forward_name: the value to put in the upstream request `model` field
       - is_lora:      True when `requested` matched a LoRA served name
+      - kind:         the group's endpoint kind (chat | embed | rerank)
     or None when nothing matches.
     """
     engines = config.get("LLM_engines", {})
@@ -41,6 +51,7 @@ def resolve_model(config: dict, requested: str) -> Optional[dict]:
             "model_cfg": engine,
             "forward_name": model_tag,
             "is_lora": False,
+            "kind": engine_kind(engine),
         }
     for group, eng in engines.items():
         for mod in _lora_modules(eng):
@@ -50,6 +61,7 @@ def resolve_model(config: dict, requested: str) -> Optional[dict]:
                     "model_cfg": eng,
                     "forward_name": requested,  # keep the served LoRA name
                     "is_lora": True,
+                    "kind": engine_kind(eng),
                 }
     return None
 
@@ -58,7 +70,7 @@ def iter_models(config: dict) -> list[dict[str, Any]]:
     """Flat /v1/models payload: every base group, plus each LoRA with a parent."""
     out: list[dict[str, Any]] = []
     for group, eng in config.get("LLM_engines", {}).items():
-        out.append({"id": group, "object": "model"})
+        out.append({"id": group, "object": "model", "kind": engine_kind(eng)})
         for mod in _lora_modules(eng):
-            out.append({"id": mod["name"], "object": "model", "parent": group})
+            out.append({"id": mod["name"], "object": "model", "parent": group, "kind": "chat"})
     return out
