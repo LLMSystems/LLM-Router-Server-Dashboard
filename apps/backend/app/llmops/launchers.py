@@ -56,7 +56,7 @@ _LORA_RUNTIME_KEY = "allow_runtime_lora"
 # Router-only knobs that ride the shared model_config (EngineModelConfig is
 # extra="allow") but belong to the router, not vLLM — never pass them to
 # `vllm serve` or it errors on an unknown argument.
-_ROUTER_ONLY_KEYS = frozenset({"routing_strategy"})
+_ROUTER_ONLY_KEYS = frozenset({"routing_strategy", "kind"})
 # Everything build_vllm_cli_args must skip (model_tag is the positional arg).
 _SKIP_CLI_KEYS = frozenset({"model_tag", _LORA_RUNTIME_KEY}) | _ROUTER_ONLY_KEYS
 

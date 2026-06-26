@@ -13,7 +13,7 @@ Usage:
 Standalone (no install required): add this directory to sys.path and import.
 """
 import os
-from typing import Optional
+from typing import Literal, Optional
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
@@ -53,6 +53,14 @@ class EngineModelConfig(BaseModel):
     # silences the spurious "model_" field warnings.
     model_config = ConfigDict(extra="allow", protected_namespaces=())
     model_tag: str
+    # Router-facing endpoint kind (NOT a vLLM flag — the launcher skips it):
+    #   chat   -> /v1/chat/completions + /v1/completions (a generate model)
+    #   embed  -> /v1/embeddings        (a vLLM pooling embedding model)
+    #   rerank -> /v1/rerank + /v1/score (a vLLM cross-encoder/classify model)
+    # The router uses this to dispatch the pooling endpoints to the right group
+    # and to reject mismatched requests. The actual vLLM pooling flags
+    # (--runner pooling / --convert / --pooler-config) ride extra="allow".
+    kind: Literal["chat", "embed", "rerank"] = "chat"
     dtype: Optional[str] = None
     max_model_len: Optional[int] = None
     gpu_memory_utilization: Optional[float] = None
