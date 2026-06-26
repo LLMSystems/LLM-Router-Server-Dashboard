@@ -158,6 +158,57 @@ LLM_engines:
       tensor_parallel_size: 1
       # No tool calling: vLLM has no Phi-3.5 tool parser (phi4_mini_json is Phi-4 only).
 
+  # --- vLLM pooling models (embed / rerank) -------------------------------
+  # A pooling model is just a vLLM instance managed exactly like the LLM groups
+  # above (start/stop, multi-instance, load-balancing, failover, monitoring).
+  # The only extra field is `kind`, which tells the ROUTER which endpoint the
+  # group serves (NOT a vLLM flag — the launcher skips it):
+  #   kind: embed  -> /v1/embeddings
+  #   kind: rerank -> /v1/rerank + /v1/score
+  # Native embedding/reranker checkpoints usually need no extra vLLM flags
+  # (`--runner auto` detects pooling). For non-native architectures add the
+  # pooling flags as ordinary model_config keys (they ride extra="allow"):
+  #   runner: pooling
+  #   convert: embed            # or: classify (for rerank)
+  #   pooler_config: { task: embed }   # -> --pooler-config '{"task":"embed"}'
+  # Requests whose `model` isn't an LLM_engines group fall back to the bespoke
+  # lightweight embedding_server below, so the two can coexist.
+  #
+  # Examples (commented out — uncomment + start from the dashboard to use):
+  #
+  # Distinct group name from the bespoke embedding_server's `m3e-base` key, so
+  # both can coexist: model=m3e-base-embed hits this vLLM pooling instance,
+  # model=m3e-base falls through to the lightweight server.
+  m3e-base-embed:
+    instances:
+      - id: "m3e-embed-1"
+        host: "localhost"
+        port: 8020
+        cuda_device: 0
+    model_config:
+      model_tag: "moka-ai/m3e-base"
+      kind: embed
+      dtype: "float16"
+      gpu_memory_utilization: 0.25
+      # WSL RAM is the bottleneck (not VRAM): without enforce_eager, vLLM's
+      # torch.compile + cudagraph capture exhausts host RAM and the load hangs.
+      # Pin max_model_len small. Don't run two vLLM pooling instances at once on
+      # a ~10GB WSL box. (bge-m3 also works here but is a 2.27GB download + heavier.)
+      enforce_eager: true
+      max_model_len: 512
+
+  ms-marco-rerank:
+    instances:
+      - id: "ms-marco-1"
+        host: "localhost"
+        port: 8021
+        cuda_device: 0
+    model_config:
+      model_tag: "cross-encoder/ms-marco-MiniLM-L-6-v2"
+      kind: rerank
+      dtype: "float16"
+      gpu_memory_utilization: 0.20
+
 embedding_server:
   host: "localhost"
   port: 8005
