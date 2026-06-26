@@ -616,6 +616,18 @@ export default {
     loraListComment: 'Pass any listed item in the chat request `model` field',
     vectorLengthComment: 'vector length',
     rerankComment: '/v1/rerank is a dedicated endpoint (Jina/Cohere-compatible); it returns a relevance score per candidate, sorted by descending score.',
+    msgTitle: 'Anthropic Messages & utility endpoints',
+    msgDesc:
+      'The router also proxies the Anthropic-compatible /v1/messages, plus /tokenize, /detokenize and /v1/messages/count_tokens. The model field takes the group name as usual.',
+    msgNote:
+      'Messages share the same routing as chat (load-balancing, failover, usage logging); streaming uses Anthropic\'s SSE shape. tokenize/detokenize are kind-agnostic — embedding/rerank groups have a tokenizer too.',
+    msgCurlLabel: 'Messages · cURL',
+    msgPyLabel: 'Messages · Python (anthropic SDK)',
+    tokenizeLabel: 'Tokenize / Detokenize / Count · cURL',
+    messagesBaseComment: 'base_url points at the router root; the SDK appends /v1/messages',
+    tokenizeComment: 'text -> token ids (works for any model kind)',
+    detokenizeComment: 'token ids -> text',
+    countTokensComment: 'count tokens only, no generation',
   },
 
   // ---- Resources ----

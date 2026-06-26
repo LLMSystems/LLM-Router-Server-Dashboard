@@ -212,6 +212,45 @@ curl ${base}/v1/rerank \\
   -H "Content-Type: application/json" \\
   -d '{"model": "${rerankModel.value}", "query": ${sampleQuery.value}, "documents": [${sampleDocs.value}]}'`,
 )
+
+// Anthropic-compatible Messages API — same `model` field (group name) as chat.
+const messagesCurl = computed(
+  () => `curl ${base}/v1/messages \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "model": "${m.value}",
+    "max_tokens": 256,
+    "messages": [{"role": "user", "content": ${samplePrompt.value}}]
+  }'`,
+)
+const messagesPython = computed(
+  () => `from anthropic import Anthropic
+
+# ${t('usage.messagesBaseComment')}
+client = Anthropic(base_url="${base}", api_key="not-needed")
+resp = client.messages.create(
+    model="${m.value}",
+    max_tokens=256,
+    messages=[{"role": "user", "content": ${samplePrompt.value}}],
+)
+print(resp.content[0].text)`,
+)
+const tokenizeCurl = computed(
+  () => `# ${t('usage.tokenizeComment')}
+curl ${base}/tokenize \\
+  -H "Content-Type: application/json" \\
+  -d '{"model": "${m.value}", "prompt": ${samplePrompt.value}}'
+
+# ${t('usage.detokenizeComment')}
+curl ${base}/detokenize \\
+  -H "Content-Type: application/json" \\
+  -d '{"model": "${m.value}", "tokens": [9707, 1879]}'
+
+# ${t('usage.countTokensComment')}
+curl ${base}/v1/messages/count_tokens \\
+  -H "Content-Type: application/json" \\
+  -d '{"model": "${m.value}", "messages": [{"role": "user", "content": ${samplePrompt.value}}]}'`,
+)
 </script>
 
 <template>
@@ -327,6 +366,32 @@ curl ${base}/v1/rerank \\
           <div class="space-y-2">
             <p class="text-xs font-medium text-muted-foreground">{{ t('usage.rerankCurlLabel') }}</p>
             <CodeBlock :code="rerankCurl" />
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+
+    <Card>
+      <CardHeader>
+        <CardTitle>{{ t('usage.msgTitle') }}</CardTitle>
+        <p class="text-xs text-muted-foreground">{{ t('usage.msgDesc') }}</p>
+      </CardHeader>
+      <CardContent class="space-y-4">
+        <p
+          class="rounded-md border border-border/60 bg-muted/40 px-3 py-2 text-xs text-muted-foreground"
+        >
+          {{ t('usage.msgNote') }}
+        </p>
+        <div class="grid gap-4 lg:grid-cols-2">
+          <div class="space-y-2">
+            <p class="text-xs font-medium text-muted-foreground">{{ t('usage.msgCurlLabel') }}</p>
+            <CodeBlock :code="messagesCurl" />
+            <p class="text-xs font-medium text-muted-foreground">{{ t('usage.msgPyLabel') }}</p>
+            <CodeBlock :code="messagesPython" />
+          </div>
+          <div class="space-y-2">
+            <p class="text-xs font-medium text-muted-foreground">{{ t('usage.tokenizeLabel') }}</p>
+            <CodeBlock :code="tokenizeCurl" />
           </div>
         </div>
       </CardContent>

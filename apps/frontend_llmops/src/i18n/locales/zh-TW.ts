@@ -599,6 +599,18 @@ export default {
     loraListComment: '把列出的名稱放進聊天請求的 `model` 欄位即可',
     vectorLengthComment: '向量長度',
     rerankComment: '/v1/rerank 為獨立端點（Jina/Cohere 相容），回傳每個候選的相關性分數，依分數降冪排序。',
+    msgTitle: 'Anthropic Messages 與工具端點',
+    msgDesc:
+      'Router 也代理 Anthropic 相容的 /v1/messages，以及 /tokenize、/detokenize 與 /v1/messages/count_tokens。model 欄位同樣填群組名。',
+    msgNote:
+      'Messages 與 chat 共用同一組路由（負載均衡、故障轉移、用量記錄）；串流走 Anthropic 的 SSE 格式。tokenize/detokenize 不限 kind——embedding/rerank 群組也有 tokenizer。',
+    msgCurlLabel: 'Messages · cURL',
+    msgPyLabel: 'Messages · Python (anthropic SDK)',
+    tokenizeLabel: 'Tokenize / Detokenize / Count · cURL',
+    messagesBaseComment: 'base_url 指向 Router 根網址，SDK 會自動接上 /v1/messages',
+    tokenizeComment: '文字 → token id（任何 kind 的模型皆可）',
+    detokenizeComment: 'token id → 文字',
+    countTokensComment: '只計算 token 數，不做生成',
   },
 
   resources: {
