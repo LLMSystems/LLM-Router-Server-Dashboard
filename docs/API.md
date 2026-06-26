@@ -21,7 +21,8 @@
 每個模型實例由唯一 `key` 定位：
 
 - **LLM**：`<群組名>::<instance id>`，例如 `Qwen3-0.6B::qwen3`
-- **Embedding/Reranker**：固定為 `embedding::default`
+- **vLLM pooling 群組**（`kind` 為 embed／rerank）：同 LLM 形式 `<群組名>::<instance id>`，經 `/v1/embeddings`、`/v1/rerank`、`/v1/score` 存取
+- **專用 Embedding/Reranker Server**：固定為 `embedding::default`
 
 > `::` 在 URL 裡可直接使用（curl 不需編碼）；瀏覽器/前端送出時會自動編碼成 `%3A%3A`，Backend 會正確解析。
 
@@ -344,9 +345,18 @@ curl http://localhost:8887/v1/completions \
   -d '{"model": "Qwen3-0.6B", "prompt": "天空是", "max_tokens": 16}'
 ```
 
-### 2.3 `POST /v1/embeddings`
+### 2.3–2.5 Embeddings / Rerank / Score（pooling 端點）
 
-轉發到 Embedding/Reranker Server，OpenAI Embeddings 相容（見 §3.2）。
+`/v1/embeddings`、`/v1/rerank`、`/v1/score` 共用同一套分派邏輯：Router 先讀請求的 `model`，依此決定上游——
+
+- **vLLM pooling 群組**：`model` 命中 `LLM_engines` 中 `kind` 為 `embed`／`rerank` 的群組時，走完整的 backend 路由機制（負載感知的實例選擇、故障轉移、metrics、用量記錄）。`/v1/embeddings` 需 `kind=embed`；`/v1/rerank` 與 `/v1/score` 需 `kind=rerank`。
+- **專用 embedding server**：`model` 不在 `LLM_engines` 時，fall through 到輕量的 Embedding/Reranker Server（見 §3.2–3.4）。
+
+`model` 命中了 pooling 群組但 `kind` 與端點不符（例如把 embed 模型送到 `/v1/rerank`）→ **404**。下方範例的 `model` 可替換成任一 pooling 群組名。
+
+#### 2.3 `POST /v1/embeddings`
+
+OpenAI Embeddings 相容。
 
 ```bash
 curl http://localhost:8887/v1/embeddings \
@@ -354,11 +364,11 @@ curl http://localhost:8887/v1/embeddings \
   -d '{"model": "m3e-base", "input": ["文字一", "文字二"]}'
 ```
 
-- `503`：無法連到 Embedding Server。
+- `503`：上游為專用 Embedding Server 且無法連線。
 
-### 2.4 `POST /v1/rerank`
+#### 2.4 `POST /v1/rerank`
 
-轉發到 Embedding/Reranker Server，Jina / Cohere 相容的重排序（見 §3.3）。
+獨立的重排序端點，Jina / Cohere 相容；回傳每個候選的 `relevance_score`，依分數降冪排序。
 
 ```bash
 curl http://localhost:8887/v1/rerank \
@@ -366,9 +376,9 @@ curl http://localhost:8887/v1/rerank \
   -d '{"model": "bge-reranker-large", "query": "問題", "documents": ["候選一", "候選二"]}'
 ```
 
-### 2.5 `POST /v1/score`
+#### 2.5 `POST /v1/score`
 
-轉發到 Embedding/Reranker Server，成對相關性打分（見 §3.4）。
+成對相關性打分（cross-encoder，與 rerank 同 `kind=rerank`）。
 
 ```bash
 curl http://localhost:8887/v1/score \

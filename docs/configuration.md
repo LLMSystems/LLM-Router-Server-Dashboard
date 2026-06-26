@@ -64,6 +64,14 @@ embedding_server:
       use_float16: true
 ```
 
+> **Embeddings & rerank can also run as vLLM pooling groups.** Besides this bespoke
+> `embedding_server`, you can serve `/v1/embeddings`, `/v1/rerank` and `/v1/score`
+> from a regular `LLM_engines` group whose `model_config.kind` is `embed` or `rerank`
+> — managed like an LLM group (lifecycle, load-balancing, failover) and routed by the
+> group name. The router dispatches each request to whichever upstream owns the
+> requested `model`. See [vllm_pooling_server.md](vllm_pooling_server.md) for the
+> startup flags and `config.yaml` for commented example groups.
+
 ## Key parameters
 
 | Parameter | Description | Recommended |

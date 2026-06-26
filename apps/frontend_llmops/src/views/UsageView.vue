@@ -43,10 +43,22 @@ watch(
   { immediate: true },
 )
 
-const embModel = computed(() => models.config?.embedding_server?.embedding_models?.[0] ?? 'm3e-base')
-const rerankModel = computed(
-  () => models.config?.embedding_server?.reranking_models?.[0] ?? 'bge-reranker-large',
-)
+// The `model` field accepts either a bespoke embedding-server model OR a vLLM
+// pooling group name (an LLM_engines group whose kind is embed/rerank). Resolve a
+// real one so the snippets are copy-pasteable; mirror PlaygroundView's lookup.
+function firstServingModel(mode: 'embed' | 'rerank'): string | undefined {
+  const server = models.config?.embedding_server
+  const bespoke = server
+    ? Object.keys(mode === 'rerank' ? server.reranking_models : server.embedding_models)
+    : []
+  if (bespoke.length) return bespoke[0]
+  for (const [key, engine] of Object.entries(models.config?.LLM_engines ?? {})) {
+    if (engine.settings?.kind === mode) return key.split('::')[0] ?? key
+  }
+  return undefined
+}
+const embModel = computed(() => firstServingModel('embed') ?? 'm3e-base')
+const rerankModel = computed(() => firstServingModel('rerank') ?? 'bge-reranker-large')
 
 const m = computed(() => model.value || 'Qwen3-0.6B')
 const jsonBool = computed(() => (stream.value ? 'true' : 'false'))
@@ -299,16 +311,23 @@ curl ${base}/v1/rerank \\
         <CardTitle>{{ t('usage.embTitle') }}</CardTitle>
         <p class="text-xs text-muted-foreground">{{ t('usage.embDesc') }}</p>
       </CardHeader>
-      <CardContent class="grid gap-4 lg:grid-cols-2">
-        <div class="space-y-2">
-          <p class="text-xs font-medium text-muted-foreground">{{ t('usage.embCurlLabel') }}</p>
-          <CodeBlock :code="embCurl" />
-          <p class="text-xs font-medium text-muted-foreground">{{ t('usage.embPyLabel') }}</p>
-          <CodeBlock :code="embPython" />
-        </div>
-        <div class="space-y-2">
-          <p class="text-xs font-medium text-muted-foreground">{{ t('usage.rerankCurlLabel') }}</p>
-          <CodeBlock :code="rerankCurl" />
+      <CardContent class="space-y-4">
+        <p
+          class="rounded-md border border-border/60 bg-muted/40 px-3 py-2 text-xs text-muted-foreground"
+        >
+          {{ t('usage.embModelNote') }}
+        </p>
+        <div class="grid gap-4 lg:grid-cols-2">
+          <div class="space-y-2">
+            <p class="text-xs font-medium text-muted-foreground">{{ t('usage.embCurlLabel') }}</p>
+            <CodeBlock :code="embCurl" />
+            <p class="text-xs font-medium text-muted-foreground">{{ t('usage.embPyLabel') }}</p>
+            <CodeBlock :code="embPython" />
+          </div>
+          <div class="space-y-2">
+            <p class="text-xs font-medium text-muted-foreground">{{ t('usage.rerankCurlLabel') }}</p>
+            <CodeBlock :code="rerankCurl" />
+          </div>
         </div>
       </CardContent>
     </Card>

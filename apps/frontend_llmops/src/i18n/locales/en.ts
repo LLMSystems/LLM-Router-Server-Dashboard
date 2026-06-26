@@ -597,7 +597,10 @@ export default {
     loraNote2: '· Requesting an unmounted name returns 404 — Model not found.',
     loraNote3: '· Base vs LoRA A/B: same request, just change model; Playground compare mode for side-by-side.',
     embTitle: 'Embeddings & Rerank',
-    embDesc: 'OpenAI-compatible /v1/embeddings; reranking via /v1/rerank (query + documents).',
+    embDesc:
+      'OpenAI-compatible /v1/embeddings; reranking via the dedicated /v1/rerank (query + documents), pairwise scoring via /v1/score.',
+    embModelNote:
+      'The model field takes either a bespoke embedding-server model or the name of a vLLM pooling group (started on the Models page, kind embed/rerank) — both share these endpoints and the router dispatches by model name (pooling groups also get load-balancing and failover).',
     embCurlLabel: 'Embedding · cURL',
     embPyLabel: 'Embedding · Python',
     rerankCurlLabel: 'Rerank · cURL',
@@ -612,7 +615,7 @@ export default {
     modelsComment: 'Items with a `parent` field are LoRA adapters; the parent is the base model.',
     loraListComment: 'Pass any listed item in the chat request `model` field',
     vectorLengthComment: 'vector length',
-    rerankComment: 'Including the query field switches the endpoint into rerank mode and returns a relevance score for each candidate.',
+    rerankComment: '/v1/rerank is a dedicated endpoint (Jina/Cohere-compatible); it returns a relevance score per candidate, sorted by descending score.',
   },
 
   // ---- Resources ----

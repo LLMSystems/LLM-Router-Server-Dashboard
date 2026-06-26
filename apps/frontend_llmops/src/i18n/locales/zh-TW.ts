@@ -581,7 +581,9 @@ export default {
     loraNote2: '· 打一個未掛載的名稱會回 404 — Model not found。',
     loraNote3: '· Base vs LoRA A/B：同一請求只換 model；Playground 比較模式可並排對照。',
     embTitle: 'Embeddings & Rerank',
-    embDesc: 'OpenAI 相容 /v1/embeddings；重排序走 /v1/rerank（query + documents）。',
+    embDesc: 'OpenAI 相容 /v1/embeddings；重排序走獨立的 /v1/rerank（query + documents），成對打分走 /v1/score。',
+    embModelNote:
+      'model 可填專用 embedding server 的模型名，或在「模型」頁啟動、kind 為 embed/rerank 的 vLLM pooling 群組名——兩者共用同一組端點，由 Router 依 model 自動路由（pooling 群組另享負載均衡與故障轉移）。',
     embCurlLabel: 'Embedding · cURL',
     embPyLabel: 'Embedding · Python',
     rerankCurlLabel: 'Rerank · cURL',
@@ -596,7 +598,7 @@ export default {
     modelsComment: '有 `parent` 欄位的項目就是 LoRA，父模型即為它所掛載的 base。',
     loraListComment: '把列出的名稱放進聊天請求的 `model` 欄位即可',
     vectorLengthComment: '向量長度',
-    rerankComment: '帶上 query 欄位後，端點會切成 rerank 模式，回傳每個候選的相關性分數。',
+    rerankComment: '/v1/rerank 為獨立端點（Jina/Cohere 相容），回傳每個候選的相關性分數，依分數降冪排序。',
   },
 
   resources: {
