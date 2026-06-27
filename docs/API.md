@@ -115,7 +115,7 @@ curl -X POST http://localhost:5000/api/models/Qwen3-0.6B::qwen3/stop
 | `model_tag` | string \| null | vLLM 模型 tag（embedding 為 null） |
 | `host` / `port` | string / int | 該實例監聽位址 |
 | `state` | enum | **觀測到的真實狀態**（見下） |
-| `desired` | `running` \| `stopped` | 使用者要求的目標狀態 |
+| `desired` | `running` \| `asleep` \| `stopped` | 使用者要求的目標狀態 |
 | `managed` | bool | 是否由本 Backend 啟動（決定能否被停止） |
 | `pid` | int \| null | 進程 PID（執行中才有） |
 | `last_error` | string \| null | 最近一次失敗原因（含 log 尾端） |
@@ -139,8 +139,39 @@ ready/starting ──stop──▶ stopping ──進程退出──▶ stopped
 | `stopped` | 未執行 |
 | `starting` | 已 spawn，尚未通過 `/health` |
 | `ready` | `/health` 回 200，可服務 |
+| `sleeping` | vLLM level-1 睡眠中：進程存活、VRAM 已釋放，秒級可喚醒；router 不會路由到它 |
 | `failed` | 啟動逾時、或進程非預期退出（看 `last_error`） |
 | `stopping` | 已送停止訊號，等待進程退出 |
+
+### 1.4a `POST /api/models/{key}/sleep` · `POST /api/models/{key}/wake` — 睡眠／喚醒
+
+需模型以 `enable_sleep_mode: true` 啟動。`sleep`（選用 `?level=1`）把 `ready` 實例轉 `sleeping`（釋放 VRAM、保留暖機）；`wake` 轉回 `ready`。autoscaled 群組由 autoscaler 全權，手動呼叫回 `409`。
+
+| 狀態碼 | 情況 |
+|--------|------|
+| `200 OK` | 成功，回傳 `ModelView` |
+| `409 Conflict` | 狀態不符（如非 ready 不能 sleep）、未開 sleep mode、或群組已 autoscaled |
+| `502 Bad Gateway` | vLLM sleep/wake 端點失敗 |
+
+### 1.4b `PUT /api/models/{group}/autoscale` — 設定群組自動擴縮
+
+不需停機。Body：`{ "enabled": bool, "min_ready"?: int, "max_ready"?: int }`。`enabled:false` 關閉。進階時程（門檻、冷卻、sleep_after…）沿用 schema 預設，需客製時改 config.yaml。
+
+```bash
+curl -X PUT http://localhost:5000/api/models/Qwen3-0.6B/autoscale \
+  -H 'Content-Type: application/json' -d '{"enabled":true,"min_ready":1,"max_ready":2}'
+```
+
+### 1.4c `PUT /api/models/{group}/fallback` — 設定跨模型 fallback 鏈
+
+不需停機。Body：`{ "fallback": ["GroupB", "GroupC"] }`（順序即嘗試順序，`[]` 清除）。該群組所有實例不可用時 router 依序改路由到這些相容群組。回 `409` 表示有未知群組名。
+
+```bash
+curl -X PUT http://localhost:5000/api/models/Qwen3-0.6B/fallback \
+  -H 'Content-Type: application/json' -d '{"fallback":["Qwen2.5-0.5B-Instruct"]}'
+```
+
+> `autoscale` 與 `fallback` 都會出現在 `GET /api/config` 的每群組欄位；皆寫入 overlay，router 在 `/reload` 時吃到。
 
 ### 1.5 `GET /api/config` — 設定摘要
 
@@ -253,6 +284,17 @@ curl -s http://localhost:5000/api/usage
     "total_tokens": 21, "p50_latency_ms": 1692.6, "p95_latency_ms": 1692.6 }
 ]
 ```
+
+#### `GET /api/load` — 每群組即時負載（autoscaling 訊號）
+
+每 ~5s 由 backend 從 router 的 `/metrics` 聚合並 join registry 狀態。回傳 `{group: {...}}`：
+
+```json
+{ "Qwen3-0.6B": { "ready_replicas": 1, "asleep_replicas": 0, "stopped_replicas": 3,
+                  "waiting_total": 0, "running_total": 0, "waiting_per_replica": 0, "kv_avg": 0 } }
+```
+
+> backend 另在根路徑 `GET /metrics` 吐 Prometheus 格式的擴縮指標（`llmops_group_*`、`llmops_autoscale_*`），由內建 Prometheus（job `llmops-backend`）抓取、餵 Grafana 的 Autoscaling dashboard。
 
 #### `GET /api/requests?model_key=&limit=100` — 近期請求日誌
 

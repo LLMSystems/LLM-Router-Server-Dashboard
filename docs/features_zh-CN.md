@@ -18,6 +18,15 @@
 - **VRAM 預檢防呆** — 啟動前估算顯存，可能 OOM 就擋下，並提供一鍵 *Force start* 覆寫。
 - **GPU 自動擺放** — 未指定 `cuda_device` 的實例會自動擺到剩餘顯存最多的 GPU。
 - **失敗自動重啟** — managed 模型崩潰後以指數退避自動重啟（可設次數，恢復健康後重置）。
+- **Sleep mode（暖待命）** — 群組設 `enable_sleep_mode` 後多一個 `sleeping` 狀態：vLLM
+  level-1 睡眠釋放副本 VRAM，但秒級即可喚醒（非冷啟）。router 會跳過睡眠中的實例；
+  sleep/wake 為 admin 端點，也是 autoscaler 的暖待命階。
+- **自動擴縮** — 每群組由 backend 保留 `min_ready` 暖機副本，依佇列深度
+  （`waiting_per_replica`）擴容（優先喚醒睡眠副本、其次冷啟）到 `max_ready`；閒置時逐階
+  縮回 `ready → sleep → stop`（不對稱冷卻）。config.yaml 或控制台皆可設定（開啟後該群組
+  手動啟停停用）。見 [autoscaling-design_zh-CN.md](autoscaling-design_zh-CN.md)。
+- **跨模型 fallback** — 群組可設 `fallback` 鏈；該群組所有實例不可用時，router 改路由到
+  下一個相容群組（回應反映實際服務的模型），而非直接失敗。
 
 ## 觀測性
 
@@ -26,7 +35,11 @@
   mission-control 圖，含流動的流量邊、GPU 擺放邊與控制平面；節點可點擊下鑽。
 - **Router 負載平衡視圖** — 動畫扇形圖呈現每個副本的實際流量佔比，以及 router 下一個會
   選的實例。
-- **Grafana 監控**（內建）— 見 [monitoring_zh-CN.md](monitoring_zh-CN.md)。
+- **Grafana 監控**（內建）— 見 [monitoring_zh-CN.md](monitoring_zh-CN.md)。含一個 **Autoscaling**
+  dashboard（副本階梯、佇列 vs 門檻、擴縮事件、VRAM-blocked），嵌入為 Monitoring 分頁，
+  資料來自 backend 的 `/metrics`。
+- 每群組即時負載（`GET /api/load`）：ready/asleep/stopped 副本數 + 佇列深度，並在每張模型卡
+  顯示佇列／睡眠徽章。
 - 每模型用量（次數、錯誤率、p50/p95 延遲、tokens）、請求日誌、狀態轉移事件時間軸。
 - GPU／CPU／記憶體監控，以及 GPU 進程清單。
 
@@ -67,4 +80,5 @@
 
 - 明暗雙主題、資訊密集的「控制室」介面。
 - **管理員權杖控管**控制操作（啟動／停止／新增／編輯／移除），以及 **API 金鑰管理** —
-  發行／撤銷用於 router 推理的金鑰，並在請求日誌中做 per-key 用量歸屬。
+  發行／撤銷用於 router 推理的金鑰，含 per-key 用量歸屬、每分鐘**速率上限**，以及在 router
+  強制的 **token 額度**（總量／每日／每月，超額回 429）。

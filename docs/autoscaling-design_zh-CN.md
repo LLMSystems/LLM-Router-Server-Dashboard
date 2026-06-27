@@ -193,9 +193,9 @@ LLM_engines:
 |---|---|---|
 | **0** ✅ | `SLEEPING` 狀態 + `ASLEEP` desired、launcher sleep 旗標、manager `sleep()/wake()`、reconciler 處理、router 排除 sleeping、模型編輯器 sleep toggle | **手動 sleep/wake** 就能用：閒置模型一鍵釋放 VRAM、秒級喚醒 |
 | **1** ✅ | backend 消費 router `/metrics` 聚合 per-group 負載 + `/api/load` + 群組卡佇列/睡眠徽章 | 每 group 即時飽和度可視化 |
-| **2** | `autoscaler.py` 控制迴圈：佇列驅動擴容（wake 優先）、閒置縮容（ready→sleep→stop）、不對稱冷卻、容量會計、min/max、手動禁用 | **全自動擴縮** |
-| **3** | 模型編輯器設定、asleep/autoscaled 徽章、拓撲與事件 | 完整 UX |
-| **4** | Grafana 面板、告警、scale-to-zero opt-in | 營運完備 |
+| **2** ✅ | `autoscaler.py` 控制迴圈：佇列驅動擴容（wake 優先）、閒置縮容（ready→sleep→stop）、不對稱冷卻、容量會計、min/max/min_ready floor、手動 409 | **全自動擴縮** |
+| **3** ✅ | 群組卡 autoscale 設定對話框（開關 + min/max）、autoscaled 徽章、手動控制停用、`PUT /api/models/{group}/autoscale` | 完整 UX |
+| **4** ✅ | backend `/metrics` Prometheus 吐指標、`llmops-backend` scrape job、Grafana autoscaling dashboard（嵌入 Monitoring 分頁）、告警（VRAM-blocked / saturated-at-max） | 營運完備 |
 
-建議先交付 **Phase 0**（風險低、即使不做 autoscaler 也有用），驗證 sleep/wake 在你的
-WSL + Qwen 配置穩定後，再推 Phase 1–2。
+**全部完成（commit `2da442c` / `3956403` / `6a4c585` / `c5ef356`）。** scale-to-zero（`min_ready: 0`）
+程式已支援（睡到只剩暖待命，靠 wake 秒級回來），文件/UI 預設仍保 1 暖機;model 別名為後續。

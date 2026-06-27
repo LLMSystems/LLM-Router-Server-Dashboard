@@ -38,6 +38,14 @@ LLM_engines:
       max_model_len: 500
       gpu_memory_utilization: 0.35
       tensor_parallel_size: 1
+      enable_sleep_mode: true        # warm-standby tier (autoscaler sleeps instead of stops)
+
+    # Group-level (siblings of instances / model_config; all optional, also UI-settable)
+    autoscale:                       # see docs/autoscaling-design_zh-CN.md
+      enabled: true
+      min_ready: 1                   # replicas kept warm
+      max_ready: 2                   # cap on ready replicas (advanced timings default)
+    fallback: ["Qwen2.5-0.5B-Instruct"]  # route here, in order, when this group is fully down
 
 # Embedding server configuration (optional)
 embedding_server:
@@ -81,6 +89,17 @@ embedding_server:
 | `tensor_parallel_size` | Multi-GPU parallelism count | Number of GPUs |
 | `dtype` | Inference precision | float16 (faster) / bfloat16 (more stable) |
 | `cuda_device` | GPU device number | 0, 1, 2… |
+| `enable_sleep_mode` | Enable the sleep warm-standby tier (adds the dev-mode env) | On if using the autoscaler's sleep tier |
+
+### Group-level (routing / scaling)
+
+Written under a group, as siblings of `instances` / `model_config`; all optional and **also UI-settable** (stored in the overlay, which overrides config.yaml):
+
+| Field | Description |
+|------|------|
+| `routing_strategy` | Per-group load-balancing strategy (overrides the global) — see [routing-strategies.md](routing-strategies.md) |
+| `autoscale` | Autoscaling policy: `enabled` / `min_ready` / `max_ready` / (advanced) `scale_up_waiting`·`sleep_after_s`·`stop_after_s`·`cooldown_s`. See [autoscaling-design_zh-CN.md](autoscaling-design_zh-CN.md) |
+| `fallback` | Cross-model fallback chain (group names); the router routes here, in order, when this group is fully down |
 
 ## Running multiple models at once
 

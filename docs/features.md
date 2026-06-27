@@ -23,6 +23,20 @@
   GPU with the most free memory.
 - **Auto-restart** — a managed model that crashes is restarted with exponential
   backoff (configurable budget, resets once healthy).
+- **Sleep mode (warm standby)** — a group launched with `enable_sleep_mode` gains a
+  third lifecycle state, `sleeping`: vLLM level-1 sleep frees the replica's VRAM but
+  keeps it loadable in seconds (no cold start). The router skips sleeping instances;
+  sleep/wake are admin endpoints and the autoscaler uses them as its warm tier.
+- **Autoscaling** — per group, the backend keeps `min_ready` replicas warm and scales
+  up on queue depth (`waiting_per_replica`) — waking an asleep replica first, else
+  cold-starting — up to `max_ready`; when idle it folds replicas back down
+  `ready → sleep → stop` with asymmetric cooldowns. Configured from config.yaml or the
+  dashboard (manual start/stop is disabled on an autoscaled group). See
+  [autoscaling-design_zh-CN.md](autoscaling-design_zh-CN.md).
+- **Cross-model fallback** — a group can declare a `fallback` chain of other groups;
+  when every instance of the group is unavailable the router routes the request to the
+  next compatible group (response reflects the model that actually served) instead of
+  failing.
 
 ## Observability
 
@@ -32,7 +46,11 @@
   and a control plane; nodes are clickable drill-ins.
 - **Router load-balancing view** — an animated fan showing each replica's real traffic
   share and the instance the router will pick next.
-- **Grafana monitoring** (bundled) — see [monitoring.md](monitoring.md).
+- **Grafana monitoring** (bundled) — see [monitoring.md](monitoring.md). Includes an
+  **Autoscaling** dashboard (replica ladder, queue vs threshold, scale events,
+  VRAM-blocked) embedded as a Monitoring tab, fed by the backend's `/metrics`.
+- Per-group live load (`GET /api/load`): ready/asleep/stopped replica counts + queue
+  depth, surfaced as queue/asleep badges on each model card.
 - Per-model usage (count, error rate, p50/p95 latency, tokens), request log, and a
   state-transition event timeline.
 - GPU / CPU / memory monitoring plus a GPU-process inventory.
@@ -84,4 +102,5 @@
 - Light / dark theme, dense "control-room" interface.
 - **Admin-token-gated control** (start / stop / add / edit / remove) and **API-key
   management** — mint/revoke keys that authenticate router inference, with per-key
-  usage attribution in the request log.
+  usage attribution in the request log, a per-minute **rate limit**, and a **token
+  quota** (total / daily / monthly) enforced at the router (429 once over).

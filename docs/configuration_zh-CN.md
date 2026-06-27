@@ -37,6 +37,14 @@ LLM_engines:
       max_model_len: 500
       gpu_memory_utilization: 0.35
       tensor_parallel_size: 1
+      enable_sleep_mode: true        # 開啟暖待命層（autoscaler 縮容時用 sleep 取代 stop）
+
+    # 群組層級（與 instances / model_config 同層，皆選用，也可從控制台設定）
+    autoscale:                       # 自動擴縮（見 docs/autoscaling-design_zh-CN.md）
+      enabled: true
+      min_ready: 1                   # 永遠保熱的副本數
+      max_ready: 2                   # 就緒副本上限（其餘進階時程用預設）
+    fallback: ["Qwen2.5-0.5B-Instruct"]  # 此群組全掛時依序改路由到這些相容群組
 
 # Embedding 服務器配置（可選）
 embedding_server:
@@ -72,6 +80,17 @@ embedding_server:
 | `tensor_parallel_size` | 多 GPU 並行數 | GPU 數量 |
 | `dtype` | 推理精度 | float16（速度快） / bfloat16（更穩定） |
 | `cuda_device` | GPU 設備編號 | 0, 1, 2… |
+| `enable_sleep_mode` | 開啟 sleep 暖待命層（會自動帶 dev-mode env） | 要用自動擴縮的睡眠階就開 |
+
+### 群組層級（routing / 擴縮）
+
+這些寫在群組底下、與 `instances` / `model_config` 同層，皆選用；**也可從控制台設定**（寫入 overlay，會覆蓋 config.yaml 的同名設定）：
+
+| 欄位 | 說明 |
+|------|------|
+| `routing_strategy` | 該群組的負載平衡策略（覆蓋全域），見 [routing-strategies_zh-CN.md](routing-strategies_zh-CN.md) |
+| `autoscale` | 自動擴縮策略：`enabled` / `min_ready` / `max_ready` /（進階）`scale_up_waiting`·`sleep_after_s`·`stop_after_s`·`cooldown_s`。見 [autoscaling-design_zh-CN.md](autoscaling-design_zh-CN.md) |
+| `fallback` | 跨模型 fallback 鏈（群組名陣列）：此群組全掛時 router 依序改路由 |
 
 ## 同時啟動多個模型
 

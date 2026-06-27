@@ -30,7 +30,9 @@
 
 - **一個 router 掌控整個集群** — 單一 OpenAI 與 Anthropic 相容入口統管所有模型。以 `model` 欄位路由 `/v1/chat/completions`、`/v1/messages`、`/v1/embeddings`、`/v1/rerank`、`/v1/score`、`/tokenize` 等端點；router 自動解析群組並在實例間負載平衡，客戶端永遠不直接連到單一實例。
 - **貼上 `vllm serve …` 即可新增模型** — 解析成表單、以動態 overlay 疊加；router 熱重載。
-- **生命週期** — 每實例狀態機（`stopped → starting → ready → failed`）、VRAM 預檢防呆、GPU 自動擺放、崩潰指數退避自動重啟。
+- **生命週期** — 每實例狀態機（`stopped → starting → ready → sleeping → failed`）、VRAM 預檢防呆、GPU 自動擺放、崩潰指數退避自動重啟。
+- **自動擴縮（含暖待命層）** — 每群組保留 `min_ready` 暖機副本，依佇列深度擴容（優先喚醒、其次冷啟）到 `max_ready`；閒置時逐階縮回 `ready → sleep → stop`。vLLM **sleep mode**（level-1）釋放副本 VRAM 但秒級喚醒，所以縮容不必付出數分鐘冷啟代價。config.yaml 或控制台皆可設定，內建即時 Grafana 面板與告警。
+- **跨模型 fallback** — 給群組設 `fallback` 鏈，某模型整組下線時請求自動降級到另一個相容模型，而非直接失敗。
 - **可插拔路由策略** — 每個模型群組或全域各自選負載平衡策略：`least_load`（預設）、`round_robin`、`random`、`least_inflight`、`p2c`,以及 `session_affinity` / `prefix_affinity`(多輪對話與共用 prompt 的快取重用）。可在控制台即時切換;失效轉移與每後端冷卻對所有策略一體適用。
 - **跨 instance KV cache 共享** — 在模型編輯器逐群組開關：各副本透過共享 store（vLLM `OffloadingConnector`）互相重用算過的 KV,相同前綴不必重算（實測外部 prefix cache 命中率約 99%、暖過的 prompt TTFT 降 31%）。流量頁與系統拓撲會標示哪些群組共用、哪些各自獨立。
 - **即時觀測** — SSE 狀態、動畫系統拓撲圖與 router 負載平衡圖、每模型用量／延遲／錯誤統計。
@@ -38,7 +40,7 @@
 - **Playground** — OpenAI 相容的 chat（串流）／completions／embeddings／reranking。
 - **壓測與評測** — LLM 壓測（並發、到達率、SLA 自動調優）＋ 30+ 個準確度資料集與 LLM-as-judge。
 - **資料庫** — 在 UI 瀏覽／預下載 HF 權重與資料集；工具調用 parser 助手；LoRA 支援。
-- **安全性** — 管理員權杖控管操作，並可發行／撤銷帶 per-key 用量歸屬的 API 金鑰。
+- **安全性** — 管理員權杖控管操作，並可發行／撤銷 API 金鑰，帶 per-key 用量歸屬、速率上限與 **token 額度**（總量／每日／每月）。
 
 完整說明見 [docs/features_zh-CN.md](docs/features_zh-CN.md)。
 
