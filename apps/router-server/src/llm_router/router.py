@@ -66,7 +66,14 @@ async def drain_backend(request: Request):
     if not model_key or not instance_id:
         raise HTTPException(status_code=400, detail="model_key and instance_id required")
     ttl = float(body.get("ttl", 60.0))
-    mark_draining(request.app, model_key, instance_id, ttl=ttl)
+    mark_draining(request.app, model_key, instance_id, ttl=ttl)  # immediate, this replica
+    # Shared so every router replica drains it (each refreshes from the store).
+    store = getattr(request.app.state, "store", None)
+    if store is not None and hasattr(store, "set_draining"):
+        try:
+            await store.set_draining(f"{model_key}::{instance_id}", ttl)
+        except Exception:
+            pass
     return {"draining": True, "inflight": get_inflight(request.app, model_key, instance_id)}
 
 
@@ -78,6 +85,12 @@ async def undrain_backend(request: Request):
     if not model_key or not instance_id:
         raise HTTPException(status_code=400, detail="model_key and instance_id required")
     clear_draining(request.app, model_key, instance_id)
+    store = getattr(request.app.state, "store", None)
+    if store is not None and hasattr(store, "clear_draining"):
+        try:
+            await store.clear_draining(f"{model_key}::{instance_id}")
+        except Exception:
+            pass
     return {"draining": False}
 
 

@@ -77,6 +77,17 @@ async def poll_metrics_forever(app, interval: float = 1.0):
                 new_cache.setdefault(model_key, {})[instance_id] = metric
 
             app.state.metrics_cache = new_cache
+
+            # HA: refresh the shared drain set so a backend's drain (written via any
+            # router's /drain) is honoured by *every* router replica, and expired
+            # marks heal. No-op when there's no store.
+            store = getattr(app.state, "store", None)
+            if store is not None and hasattr(store, "list_draining"):
+                try:
+                    app.state.draining = await store.list_draining()
+                except Exception:
+                    pass
+
             await asyncio.sleep(interval)
 
     except asyncio.CancelledError:

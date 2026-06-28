@@ -373,3 +373,15 @@ async def test_leader_release_only_by_holder(store):
     await store.try_acquire_leader("cp", "A", ttl=10, ts=1.0)
     assert await store.release_leader("cp", "B") is False  # not the holder
     assert (await store.get_leader("cp"))["holder"] == "A"
+
+
+async def test_draining_set_list_expire_clear(store):
+    await store.set_draining("G::a", ttl=10, ts=1000.0)
+    await store.set_draining("G::b", ttl=10, ts=1000.0)
+    assert (await store.list_draining(ts=1005.0)).keys() == {"G::a", "G::b"}
+    # Re-marking extends the expiry (idempotent upsert).
+    await store.set_draining("G::a", ttl=10, ts=1008.0)
+    # At t=1012 'b' (exp 1010) is gone but 'a' (exp 1018) remains.
+    assert set(await store.list_draining(ts=1012.0)) == {"G::a"}
+    await store.clear_draining("G::a")
+    assert await store.list_draining(ts=1012.0) == {}

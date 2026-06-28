@@ -84,3 +84,25 @@ def test_drain_endpoint_marks_and_reports_inflight():
 def test_drain_requires_fields():
     _, client = _client()
     assert client.post("/drain", json={"model_key": "M"}).status_code == 400
+
+
+class _DrainStore:
+    """Captures shared drain marks so a backend's drain reaches every replica."""
+    def __init__(self):
+        self.marks = {}
+
+    async def set_draining(self, key, ttl, ts=None):
+        self.marks[key] = ttl
+
+    async def clear_draining(self, key):
+        self.marks.pop(key, None)
+
+
+def test_drain_propagates_to_shared_store():
+    app, client = _client()
+    store = _DrainStore()
+    app.state.store = store
+    client.post("/drain", json={"model_key": "M", "instance_id": "a", "ttl": 30})
+    assert store.marks == {"M::a": 30}  # written to the shared store, not just local
+    client.post("/undrain", json={"model_key": "M", "instance_id": "a"})
+    assert store.marks == {}

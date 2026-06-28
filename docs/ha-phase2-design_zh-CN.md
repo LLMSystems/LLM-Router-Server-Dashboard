@@ -149,9 +149,21 @@
 
 ---
 
-## 2d. Router 水平擴
+## 2d. Router 水平擴  ✅ 已完成
 
 **目標**：router 可開多副本放 LB 後面(配合 Phase 1 的 `/health` `/ready`)。
+
+> 進度：**已完成**。核心是把 Phase 1 的 in-memory `draining` 搬到**共享 store**:
+> 新 `draining(key, expires_at)` 表 + `set/clear/list_draining`(自帶 TTL,兩後端測試)。router
+> 的 `/drain` `/undrain` 除了標記本地,也寫進 store;**metrics poller 每秒從 store 刷新
+> `app.state.draining`** → backend 的排空標記透過任一 router 寫入後,**每個 router 副本都生效**、
+> 過期自動消失。selection 仍查本地(快),只是本地由共享 store 同步。
+> **inflight 接受近似**:每副本只記自己的 `backend_inflight`(只影響自己這台的選擇);真正後端負載
+> 來自 vLLM `/metrics`(本就一致,各副本各自 poll)——不引入分散式計數。**RR**(`round_robin`)
+> 游標仍 per-副本,多副本下不保證全域輪替;要嚴格全域請用無狀態的 `least_load` / `p2c`(預設)。
+> 配合 C-1 的 `/health` `/ready`,router 即可多副本放 LB 後面。
+> 測試:store draining +2(兩後端)、router /drain 寫共享 store +1。backend 346 / router 116 /
+> store 58。
 
 ### 做法
 - **inflight 接受近似**：每副本各自記自己的 `backend_inflight`(只影響自己這台的選擇);真正的後端

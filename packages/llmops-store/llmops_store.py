@@ -178,6 +178,11 @@ CREATE TABLE IF NOT EXISTS leader_lease (
     holder      TEXT    NOT NULL,         -- replica id holding the lease
     expires_at  REAL    NOT NULL          -- epoch; a peer may steal it once past
 );
+
+CREATE TABLE IF NOT EXISTS draining (
+    key         TEXT    PRIMARY KEY,      -- "group::instance_id" being drained
+    expires_at  REAL    NOT NULL          -- epoch; self-expires so a stale mark heals
+);
 """
 
 # Columns added after the original schema shipped; applied on init() for DBs
@@ -704,6 +709,33 @@ class LLMOpsStore:
         )
         row = await cur.fetchone()
         return dict(row) if row else None
+
+    # ---- Drain marks (shared so every router replica honours them) --------
+
+    async def set_draining(self, key: str, ttl: float, ts: Optional[float] = None) -> None:
+        import time
+
+        await self._db.execute(
+            "INSERT INTO draining (key, expires_at) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET expires_at = excluded.expires_at",
+            (key, (ts if ts is not None else time.time()) + ttl),
+        )
+        await self._db.commit()
+
+    async def clear_draining(self, key: str) -> None:
+        await self._db.execute("DELETE FROM draining WHERE key = ?", (key,))
+        await self._db.commit()
+
+    async def list_draining(self, ts: Optional[float] = None) -> dict[str, float]:
+        """Non-expired drain marks as {key: expires_at}. Routers refresh their local
+        set from this so a backend's drain reaches every replica."""
+        import time
+
+        now = ts if ts is not None else time.time()
+        cur = await self._db.execute(
+            "SELECT key, expires_at FROM draining WHERE expires_at > ?", (now,)
+        )
+        return {r["key"]: r["expires_at"] for r in await cur.fetchall()}
 
     async def prune_audit(self, max_rows: int = 50_000) -> int:
         """Cap the audit table to its most recent ``max_rows`` rows. Returns the
