@@ -97,7 +97,8 @@ async def test_auto_restart_skips_foreign_assigned(app):
     inst = await _arm_for_restart(mgr)
     await mgr.store.set_assignment(KEY, "other-node")
 
-    await _process_restarts(mgr.registry, BackendSettings(), mgr.store, mgr)
+    foreign = await mgr.foreign_assignments()
+    await _process_restarts(mgr.registry, BackendSettings(), mgr.store, mgr, foreign)
     assert inst.state == ModelState.FAILED  # owning node restarts it, not us
 
 
@@ -107,7 +108,8 @@ async def test_auto_restart_runs_when_owned(app):
     mgr = app.state.manager
     inst = await _arm_for_restart(mgr)  # unassigned -> owned by default (collapsed)
 
-    await _process_restarts(mgr.registry, BackendSettings(), mgr.store, mgr)
+    foreign = await mgr.foreign_assignments()
+    await _process_restarts(mgr.registry, BackendSettings(), mgr.store, mgr, foreign)
     assert inst.state in (ModelState.STARTING, ModelState.READY)  # restarted
 
 

@@ -45,10 +45,11 @@ async def test_starting_becomes_ready_when_health_ok():
 
 
 class _LiveStore:
-    """Captures the instances_live heartbeat (HA Phase 3a)."""
+    """Captures the instances_live (3a) + instance_observed (3d) backfill."""
 
     def __init__(self):
         self.live: dict[str, dict] = {}
+        self.observed: dict[str, dict] = {}
 
     async def record_model_event(self, *a, **k):  # _persist calls this; no-op
         pass
@@ -60,6 +61,13 @@ class _LiveStore:
 
     async def remove_instance_live(self, key):
         self.live.pop(key, None)
+
+    async def upsert_instance_observed(self, key, node_id, state, view, ttl, ts=None):
+        import json
+        self.observed[key] = json.loads(view)
+
+    async def prune_instance_observed(self, ts=None):
+        return 0
 
 
 async def test_ready_instance_publishes_live_address():
@@ -77,6 +85,28 @@ async def test_ready_instance_publishes_live_address():
     assert pub["group_key"] == "Qwen3-0.6B" and pub["instance_id"] == "qwen3"
     assert (pub["host"], pub["port"]) == (inst.host, inst.port)
     assert pub["state"] == "ready"
+
+
+async def test_observed_backfilled_for_all_states():
+    # HA Phase 3d: every instance (not just READY) is backfilled to instance_observed
+    # so any control-plane replica can read the full fleet from the DB.
+    reg = _registry()
+    healthy = reg.get(HEALTHY)
+    healthy.state = ModelState.STARTING
+    healthy.managed = True
+    healthy.proc = FakeProc()
+    healthy.started_at = time.time()
+    stopped = reg.get("Qwen3-0.6B::qwen3-2")  # stays STOPPED
+    store = _LiveStore()
+
+    await reconcile_once(reg, FakeHTTPClient(healthy_ports={8002}), _settings(), store=store)
+
+    # READY one is in both live + observed; the STOPPED one only in observed.
+    assert HEALTHY in store.live
+    assert store.observed[HEALTHY]["state"] == "ready"
+    assert store.observed[stopped.key]["state"] == "stopped"
+    assert stopped.key not in store.live  # not routable
+    assert store.observed[HEALTHY]["key"] == HEALTHY  # full view shape
 
 
 async def test_node_host_overrides_advertised_host():

@@ -221,6 +221,19 @@ CREATE TABLE IF NOT EXISTS assignments (
     node_id     TEXT    NOT NULL,         -- node responsible for this instance
     updated_at  REAL    NOT NULL
 );
+
+-- HA Phase 3d: full observed state of every instance, backfilled each reconcile
+-- pass by the owning node-agent. Lets any control-plane replica assemble the same
+-- fleet view from the shared DB instead of its own in-memory registry. `view` is
+-- the JSON model view; `state` is denormalized for filters. Runtime/self-healing
+-- (TTL) — skipped by the migration.
+CREATE TABLE IF NOT EXISTS instance_observed (
+    key         TEXT    PRIMARY KEY,      -- "group::instance_id"
+    node_id     TEXT,                     -- node-agent that backfilled it
+    state       TEXT,                     -- observed state (denormalized)
+    view        TEXT    NOT NULL,         -- JSON snapshot of the model view
+    expires_at  REAL    NOT NULL          -- epoch; lapsed => stale, self-heals
+);
 """
 
 # Columns added after the original schema shipped; applied on init() for DBs
@@ -917,6 +930,58 @@ class LLMOpsStore:
                 "SELECT key, node_id FROM assignments WHERE node_id = ?", (node_id,)
             )
         return {r["key"]: r["node_id"] for r in await cur.fetchall()}
+
+    # ---- Observed instance state (HA Phase 3d; any replica reads one truth) ----
+
+    async def upsert_instance_observed(
+        self, key: str, node_id: Optional[str], state: Optional[str],
+        view: str, ttl: float, ts: Optional[float] = None,
+    ) -> None:
+        """Backfill an instance's full observed state (JSON `view`). Heartbeated
+        each reconcile pass by the owning node-agent (TTL = lease)."""
+        import time
+
+        now = ts if ts is not None else time.time()
+        await self._db.execute(
+            "INSERT INTO instance_observed (key, node_id, state, view, expires_at) "
+            "VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET node_id = excluded.node_id, "
+            "state = excluded.state, view = excluded.view, expires_at = excluded.expires_at",
+            (key, node_id, state, view, now + ttl),
+        )
+        await self._db.commit()
+
+    async def remove_instance_observed(self, key: str) -> None:
+        await self._db.execute("DELETE FROM instance_observed WHERE key = ?", (key,))
+        await self._db.commit()
+
+    async def list_instance_observed(self, ts: Optional[float] = None) -> list[dict]:
+        """Non-expired observed views (each the parsed JSON model view) + node_id."""
+        import json
+        import time
+
+        now = ts if ts is not None else time.time()
+        cur = await self._db.execute(
+            "SELECT key, node_id, state, view FROM instance_observed WHERE expires_at > ?",
+            (now,),
+        )
+        out = []
+        for r in await cur.fetchall():
+            view = json.loads(r["view"])
+            view["node_id"] = r["node_id"]
+            out.append(view)
+        return out
+
+    async def prune_instance_observed(self, ts: Optional[float] = None) -> int:
+        """Drop observed rows whose lease lapsed (housekeeping; reads filter too)."""
+        import time
+
+        now = ts if ts is not None else time.time()
+        cur = await self._db.execute(
+            "DELETE FROM instance_observed WHERE expires_at <= ?", (now,)
+        )
+        await self._db.commit()
+        return cur.rowcount
 
     async def prune_audit(self, max_rows: int = 50_000) -> int:
         """Cap the audit table to its most recent ``max_rows`` rows. Returns the

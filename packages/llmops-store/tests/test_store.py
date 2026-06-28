@@ -443,6 +443,36 @@ async def test_nodes_upsert_list_expire_prune(store):
 
 
 @pytest.mark.asyncio
+async def test_instance_observed_upsert_list_expire_prune(store):
+    import json
+    await store.upsert_instance_observed(
+        "G::a", "n1", "ready", json.dumps({"key": "G::a", "state": "ready", "pid": 7}),
+        ttl=10, ts=1000.0,
+    )
+    await store.upsert_instance_observed(
+        "G::b", "n1", "stopped", json.dumps({"key": "G::b", "state": "stopped"}),
+        ttl=10, ts=1000.0,
+    )
+    rows = await store.list_instance_observed(ts=1005.0)
+    by_key = {r["key"]: r for r in rows}
+    assert by_key.keys() == {"G::a", "G::b"}
+    assert by_key["G::a"]["state"] == "ready" and by_key["G::a"]["pid"] == 7
+    assert by_key["G::a"]["node_id"] == "n1"  # node_id merged into the view
+
+    # Re-backfill refreshes state + lease.
+    await store.upsert_instance_observed(
+        "G::a", "n1", "sleeping", json.dumps({"key": "G::a", "state": "sleeping"}),
+        ttl=10, ts=1008.0,
+    )
+    rows = await store.list_instance_observed(ts=1012.0)  # b (exp 1010) filtered out
+    by_key = {r["key"]: r for r in rows}
+    assert by_key.keys() == {"G::a"} and by_key["G::a"]["state"] == "sleeping"
+    assert await store.prune_instance_observed(ts=1012.0) == 1  # deletes lapsed b's row
+    await store.remove_instance_observed("G::a")
+    assert await store.list_instance_observed(ts=1012.0) == []
+
+
+@pytest.mark.asyncio
 async def test_assignments_set_list_delete(store):
     await store.set_assignment("G::a", "n1")
     await store.set_assignment("G::b", "n1")

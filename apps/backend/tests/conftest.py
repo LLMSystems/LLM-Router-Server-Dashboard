@@ -317,6 +317,29 @@ class FakeStore:
             return dict(self.assignments)
         return {k: n for k, n in self.assignments.items() if n == node_id}
 
+    # -- Observed instance state (HA Phase 3d) --
+    def __init_observed(self):
+        if not hasattr(self, "observed"):
+            self.observed = {}
+
+    async def upsert_instance_observed(self, key, node_id, state, view, ttl, ts=None):
+        import json as _json
+        self.__init_observed()
+        v = _json.loads(view)
+        v["node_id"] = node_id
+        self.observed[key] = v
+
+    async def remove_instance_observed(self, key):
+        self.__init_observed()
+        self.observed.pop(key, None)
+
+    async def list_instance_observed(self, ts=None):
+        self.__init_observed()
+        return list(self.observed.values())
+
+    async def prune_instance_observed(self, ts=None):
+        return 0
+
     async def get_current_overlay(self):
         self.__init_cv()
         import json as _json
