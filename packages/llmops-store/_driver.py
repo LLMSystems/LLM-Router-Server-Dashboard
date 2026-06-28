@@ -146,13 +146,25 @@ class PgDriver:
         self.dsn = dsn
         self._pool = None
 
-    async def connect(self) -> "PgDriver":
+    async def connect(self, *, retries: int = 30, delay: float = 1.0) -> "PgDriver":
+        import asyncio
+
         import asyncpg  # lazy: only needed in HA mode, not for SQLite installs
 
         # A pool (not a single connection): asyncpg connections aren't safe for
         # concurrent queries, but the backend/router fire many in parallel.
-        self._pool = await asyncpg.create_pool(self.dsn, min_size=1, max_size=10)
-        return self
+        # Retry: on a cold `compose up` Postgres may not accept connections yet —
+        # wait for it rather than crashing the worker (avoids a boot-order race).
+        last_err = None
+        for attempt in range(1, retries + 1):
+            try:
+                self._pool = await asyncpg.create_pool(self.dsn, min_size=1, max_size=10)
+                return self
+            except (OSError, asyncpg.PostgresError) as e:
+                last_err = e
+                if attempt < retries:
+                    await asyncio.sleep(delay)
+        raise RuntimeError(f"could not connect to Postgres after {retries} attempts: {last_err}")
 
     async def execute(self, sql: str, params=()):
         tsql = translate_placeholders(sql)
