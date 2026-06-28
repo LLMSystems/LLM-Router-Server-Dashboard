@@ -11,6 +11,7 @@ import {
   Cpu,
   Database,
   Gauge,
+  History,
   KeyRound,
   Layers,
   LayoutDashboard,
@@ -29,7 +30,7 @@ import type { ModelState } from '@/types/api'
 
 const route = useRoute()
 const models = useModelsStore()
-const { isAdmin } = useAuth()
+const { isAdmin, canOperate } = useAuth()
 const { t } = useI18n()
 
 // Roster grouped by model group (dedupes multi-instance groups), with a
@@ -77,6 +78,10 @@ const nav = computed(() => {
           { to: '/audit', label: t('sidebar.audit'), icon: ScrollText },
           { to: '/notifications', label: t('sidebar.notifications'), icon: Bell },
         ]
+      : []),
+    // Backup / version-history is operator-readable (admin-only to import/roll back).
+    ...(canOperate.value
+      ? [{ to: '/config', label: t('sidebar.config'), icon: History }]
       : []),
     { to: '/usage', label: t('sidebar.usage'), icon: BookOpen },
     { to: '/resources', label: t('sidebar.resources'), icon: Cpu },

@@ -311,6 +311,30 @@ export interface AuditEntry {
   source_ip: string | null
 }
 
+/** A summary of which instances an import/rollback added, removed or changed. */
+export interface ImportSummary {
+  added: string[]
+  removed: string[]
+  changed: string[]
+}
+
+/** One overlay snapshot in the version history (GET /api/config/versions). */
+export interface ConfigVersion {
+  id: number
+  ts: number
+  actor: string | null
+  role: Role | null
+  summary: string | null
+  sha256: string
+  is_current?: boolean
+}
+
+/** A config-version diff (GET /api/config/versions/{id}/diff). */
+export interface ConfigDiff {
+  from: { label: string; text: string }
+  to: { label: string; text: string }
+}
+
 /** Per-group live load (autoscaling signal), keyed by group name in the API. */
 export interface GroupLoad {
   group: string

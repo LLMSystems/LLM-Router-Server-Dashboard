@@ -3,7 +3,10 @@ import type {
   ApiKey,
   AuditEntry,
   CacheInfo,
+  ConfigDiff,
   ConfigSummary,
+  ConfigVersion,
+  ImportSummary,
   CreatedKey,
   CreatedOperator,
   CreateModelPayload,
@@ -321,6 +324,42 @@ export const api = {
     const qs = q.toString()
     return request<AuditEntry[]>(API_BASE, `/api/audit${qs ? `?${qs}` : ''}`)
   },
+
+  // ---- Config versioning (export / import / history / rollback) ------------
+  exportConfig: () =>
+    request<{ version: number; exported_at: number; overlay: unknown }>(
+      API_BASE,
+      '/api/config/export',
+    ),
+  importConfig: (overlay: unknown, force = false) =>
+    request<{ applied: boolean } & ImportSummary>(
+      API_BASE,
+      `/api/config/import${force ? '?force=true' : ''}`,
+      { method: 'POST', body: JSON.stringify({ overlay }) },
+    ),
+  listConfigVersions: (before?: number, limit = 50) => {
+    const q = new URLSearchParams()
+    if (before != null) q.set('before', String(before))
+    if (limit) q.set('limit', String(limit))
+    const qs = q.toString()
+    return request<{ versions: ConfigVersion[] }>(
+      API_BASE,
+      `/api/config/versions${qs ? `?${qs}` : ''}`,
+    )
+  },
+  getConfigVersion: (id: number) =>
+    request<ConfigVersion & { overlay: unknown }>(API_BASE, `/api/config/versions/${id}`),
+  diffConfigVersion: (id: number, against?: number) =>
+    request<ConfigDiff>(
+      API_BASE,
+      `/api/config/versions/${id}/diff${against != null ? `?against=${against}` : ''}`,
+    ),
+  rollbackConfigVersion: (id: number, force = false) =>
+    request<{ applied: boolean; rolled_back_to: number } & ImportSummary>(
+      API_BASE,
+      `/api/config/versions/${id}/rollback${force ? '?force=true' : ''}`,
+      { method: 'POST' },
+    ),
 
   // ---- Model weights --------------------------------------------------------
   getCache: () => request<CacheInfo>(API_BASE, '/api/cache'),
