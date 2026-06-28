@@ -179,9 +179,14 @@ class ModelManager:
                 logger.warning("Failed to assign %s to this node", key, exc_info=True)
 
     async def foreign_assignments(self) -> set[str]:
-        """Keys explicitly assigned to a *different* node — this node-agent must not
-        actuate them (their owning agent does). Empty on a single host (everything
-        is unassigned or assigned here), so collapsed behaviour is unchanged.
+        """Keys assigned to a *different, currently-alive* node — this node-agent
+        must not actuate them (their owning agent does). Empty on a single host, so
+        collapsed behaviour is unchanged.
+
+        An assignment only counts as foreign if its node is alive (heartbeating in
+        the nodes registry). One pointing at a vanished node — e.g. this host's own
+        previous, ephemeral id after a restart, or a node that died — is reclaimable
+        and NOT foreign, so actuation self-heals instead of stalling forever.
         Best-effort: any store issue yields an empty set (actuate as before)."""
         if self.store is None or not hasattr(self.store, "list_assignments"):
             return set()
@@ -189,7 +194,14 @@ class ModelManager:
             amap = await self.store.list_assignments()
         except Exception:
             return set()
-        return {k for k, n in amap.items() if n != self.settings.instance_id}
+        me = self.settings.instance_id
+        alive: set[str] = set()
+        if hasattr(self.store, "list_nodes"):
+            try:
+                alive = {n["node_id"] for n in await self.store.list_nodes()}
+            except Exception:
+                alive = set()
+        return {k for k, n in amap.items() if n != me and n in alive}
 
     async def replay_desired(self) -> None:
         """On boot (after adopt_running): start instances whose persisted desired is
@@ -251,6 +263,27 @@ class ModelManager:
 
     async def list(self) -> list[ModelInstance]:
         return await self.registry.snapshot()
+
+    async def fleet_views(self, prefer_store: bool = False) -> list[dict]:
+        """The fleet's model-view dicts. Leader (prefer_store=False): from the live
+        local registry — identical to before. Follower (prefer_store=True): the
+        shared store's observed state (the owning agents backfill it) layered over
+        the local registry, so a non-leader control-plane replica reports the real
+        fleet instead of its own idle registry (HA Phase 3d). Falls back to the
+        registry for any instance the store hasn't backfilled."""
+        node_id = self.settings.instance_id
+        base: dict[str, dict] = {}
+        for inst in await self.registry.snapshot():
+            v = inst.observed_dict()
+            v["node_id"] = node_id
+            base[inst.key] = v
+        if prefer_store and self.store is not None and hasattr(self.store, "list_instance_observed"):
+            try:
+                for v in await self.store.list_instance_observed():
+                    base[v["key"]] = v
+            except Exception:
+                logger.warning("fleet_views: failed to read observed from store", exc_info=True)
+        return list(base.values())
 
     async def get(self, key: str) -> ModelInstance:
         return self._require(key)

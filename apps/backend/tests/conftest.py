@@ -317,6 +317,22 @@ class FakeStore:
             return dict(self.assignments)
         return {k: n for k, n in self.assignments.items() if n == node_id}
 
+    # -- Nodes registry (HA Phase 3b) --
+    def __init_nodes(self):
+        if not hasattr(self, "nodes"):
+            self.nodes = {}
+
+    async def upsert_node(self, node_id, hostname, capacity, ttl, ts=None):
+        self.__init_nodes()
+        self.nodes[node_id] = {"hostname": hostname, "capacity": capacity}
+
+    async def list_nodes(self, ts=None):
+        self.__init_nodes()
+        return [{"node_id": nid, **v} for nid, v in self.nodes.items()]
+
+    async def prune_nodes(self, ts=None):
+        return 0
+
     # -- Observed instance state (HA Phase 3d) --
     def __init_observed(self):
         if not hasattr(self, "observed"):

@@ -64,6 +64,7 @@ async def test_replay_skips_instance_assigned_to_another_node(app):
     inst.set_state(ModelState.STOPPED)
     await mgr.store.set_instance_desired(KEY, "running")
     await mgr.store.set_assignment(KEY, "some-other-node")
+    await mgr.store.upsert_node("some-other-node", "h", None, ttl=30)  # alive owner
 
     await mgr.replay_desired()
 
@@ -74,8 +75,12 @@ async def test_foreign_assignments_excludes_local_and_unassigned(app):
     mgr = app.state.manager
     me = mgr.settings.instance_id
     await mgr.store.set_assignment("Qwen3-0.6B::qwen3", me)            # mine
-    await mgr.store.set_assignment("Qwen3-0.6B::qwen3-2", "node-zzz")  # foreign
+    await mgr.store.set_assignment("Qwen3-0.6B::qwen3-2", "node-zzz")  # foreign (alive)
+    await mgr.store.set_assignment("Qwen3-0.6B::qwen3-3", "node-dead") # stale (no heartbeat)
+    await mgr.store.upsert_node("node-zzz", "h", None, ttl=30)         # node-zzz is alive
     foreign = await mgr.foreign_assignments()
+    # Only the live foreign node blocks us; the vanished node's stale assignment is
+    # reclaimable, so it is NOT foreign.
     assert foreign == {"Qwen3-0.6B::qwen3-2"}
 
 
@@ -96,6 +101,7 @@ async def test_auto_restart_skips_foreign_assigned(app):
     mgr = app.state.manager
     inst = await _arm_for_restart(mgr)
     await mgr.store.set_assignment(KEY, "other-node")
+    await mgr.store.upsert_node("other-node", "h", None, ttl=30)  # alive owner
 
     foreign = await mgr.foreign_assignments()
     await _process_restarts(mgr.registry, BackendSettings(), mgr.store, mgr, foreign)
@@ -111,6 +117,20 @@ async def test_auto_restart_runs_when_owned(app):
     foreign = await mgr.foreign_assignments()
     await _process_restarts(mgr.registry, BackendSettings(), mgr.store, mgr, foreign)
     assert inst.state in (ModelState.STARTING, ModelState.READY)  # restarted
+
+
+async def test_replay_reclaims_stale_assignment_to_dead_node(app):
+    # Self-heal: an instance assigned to a node that no longer heartbeats (e.g. this
+    # host's own previous, ephemeral id after a restart) is reclaimable, so replay
+    # still restores it rather than stalling forever.
+    mgr = app.state.manager
+    inst = mgr.registry.get(KEY)
+    inst.set_state(ModelState.STOPPED)
+    await mgr.store.set_instance_desired(KEY, "running")
+    await mgr.store.set_assignment(KEY, "ghost-node")  # never registered / heartbeat lapsed
+
+    await mgr.replay_desired()
+    assert inst.state in (ModelState.STARTING, ModelState.READY)  # reclaimed + started
 
 
 async def test_replay_noop_without_store():

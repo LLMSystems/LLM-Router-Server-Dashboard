@@ -26,6 +26,9 @@ class ModelView(BaseModel):
     ready_at: Optional[float] = None
     updated_at: float
     restart_count: int = 0
+    # HA Phase 3d: which node-agent runs this instance (multi-node deploys). None
+    # on a single host / when unknown.
+    node_id: Optional[str] = None
 
     @classmethod
     def from_instance(cls, inst: ModelInstance) -> "ModelView":
