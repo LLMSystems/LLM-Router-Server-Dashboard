@@ -20,7 +20,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install fastapi httpx pydantic pyyaml psutil aiosqlite huggingface_hub \
-                      uvloop pytest "pytest-asyncio>=0.23"
+                      uvloop "pyjwt[crypto]" asyncpg pytest "pytest-asyncio>=0.23"
       - name: Store tests
         run: pytest -q packages/llmops-store
       - name: Backend tests
