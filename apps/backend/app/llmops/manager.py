@@ -845,14 +845,21 @@ class ModelManager:
             inst.model_tag, inst.log_path = spec.model_tag, spec.log_path
         return {"added": added, "removed": removed, "changed": changed}
 
-    async def import_overlay(self, overlay: dict, *, force: bool = False) -> dict[str, list[str]]:
+    async def import_overlay(
+        self, overlay: dict, *, force: bool = False,
+        actor: Optional[str] = None, role: Optional[str] = None,
+        summary: Optional[str] = None,
+    ) -> dict[str, list[str]]:
         """Replace the whole overlay with `overlay` (a backup or a past version).
 
         Validates the merged result first; then unless `force`, refuses if any
         instance whose definition would be removed or changed is still running
         (a launch-param change under a live process would silently drift). With
         `force`, those instances are stopped first so nothing is orphaned.
-        Returns the {added, removed, changed} key summary."""
+        Returns the {added, removed, changed} key summary.
+
+        `actor`/`role`/`summary` attribute the resulting config-version snapshot
+        (see below)."""
         from app.services.overlay import build_merged_config, save_overlay
 
         if not isinstance(overlay, dict):
@@ -883,11 +890,25 @@ class ModelManager:
 
         save_overlay(overlay, self.overlay_path)
         self.config = new_config
+        # HA: persist this overlay to the shared DB as the new current snapshot
+        # BEFORE reloading the router. The backend and router share the overlay
+        # file, and the router's /reload re-hydrates that file from the DB's latest
+        # snapshot — so if the DB still held the *previous* overlay, the reload would
+        # immediately clobber this import (and the request middleware, seeing the
+        # file revert, would never snapshot it). No-op in SQLite mode, where the
+        # file is the source of truth and the middleware snapshots it post-request.
+        if getattr(self.store, "db_url", None) is not None:
+            try:
+                from app.core.config_versioning import snapshot_overlay
+                await snapshot_overlay(self.store, actor=actor, role=role,
+                                       summary=summary, path=self.overlay_path)
+            except Exception:
+                logger.warning("import_overlay: failed to snapshot overlay to DB", exc_info=True)
         async with self.registry.lock:
-            summary = self.resync_registry(new_config)
+            summary_keys = self.resync_registry(new_config)
         await self.trigger_router_reload()
-        logger.info("Imported overlay: %s", summary)
-        return summary
+        logger.info("Imported overlay: %s", summary_keys)
+        return summary_keys
 
     async def stop_all(self) -> None:
         """Best-effort shutdown of every managed process (used at app shutdown)."""
