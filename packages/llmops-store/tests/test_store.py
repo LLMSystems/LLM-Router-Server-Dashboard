@@ -348,3 +348,28 @@ async def test_get_current_overlay_is_latest_snapshot(store):
     await store.record_config_version('{"LLM_engines": {"A": {}, "B": {}}}', "h2", ts=2.0)
     ov = await store.get_current_overlay()
     assert set(ov["LLM_engines"]) == {"A", "B"}  # newest snapshot
+
+
+async def test_leader_lease_acquire_contend_expire_release(store):
+    # First holder acquires.
+    assert await store.try_acquire_leader("cp", "A", ttl=10, ts=1000.0) is True
+    # A renews (still ours).
+    assert await store.try_acquire_leader("cp", "A", ttl=10, ts=1003.0) is True
+    # B can't steal a live lease.
+    assert await store.try_acquire_leader("cp", "B", ttl=10, ts=1004.0) is False
+    assert (await store.get_leader("cp"))["holder"] == "A"
+    # Once A's lease has expired, B takes over.
+    assert await store.try_acquire_leader("cp", "B", ttl=10, ts=1020.0) is True
+    assert (await store.get_leader("cp"))["holder"] == "B"
+    # A no longer holds it -> A's acquire now fails (B's is live).
+    assert await store.try_acquire_leader("cp", "A", ttl=10, ts=1021.0) is False
+    # B releases -> lease is free.
+    assert await store.release_leader("cp", "B") is True
+    assert await store.get_leader("cp") is None
+    assert await store.try_acquire_leader("cp", "A", ttl=10, ts=1030.0) is True
+
+
+async def test_leader_release_only_by_holder(store):
+    await store.try_acquire_leader("cp", "A", ttl=10, ts=1.0)
+    assert await store.release_leader("cp", "B") is False  # not the holder
+    assert (await store.get_leader("cp"))["holder"] == "A"

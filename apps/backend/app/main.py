@@ -32,6 +32,7 @@ from app.api import perf as perf_routes
 from app.api import observability as observability_routes
 from app.api import system as system_routes
 from app.core.config import get_config_path
+from app.core.leader import LeaderElector
 from app.core.logging import setup_logging
 from app.core.settings import BackendSettings
 from app.core.store import LLMOpsStore
@@ -167,42 +168,61 @@ async def lifespan(app: FastAPI):
         logger.warning("Failed to record startup config snapshot", exc_info=True)
 
     # Adopt anything already healthy before starting the loops, so state is
-    # honest from the first response.
+    # honest from the first response. (Every replica observes its own view.)
     await adopt_running(registry, http_client, settings, store, notifier)
-
-    # Restore the user's desired state: start models that should be running but
-    # aren't (a crash/restart, or a replica taking over). Skips anything adopt
-    # already found alive. Gated so a single-machine dev box can opt out.
-    if settings.replay_desired:
-        await manager.replay_desired()
 
     # Seed the Prometheus file_sd targets file (covering adopted-ready instances)
     # so monitoring has a valid file from t=0, before the first state transition.
     await manager.write_prometheus_targets()
 
     app.state.load_stats = {}
-    tasks = [
-        asyncio.create_task(reconcile_loop(registry, http_client, settings, store, manager, notifier)),
-        asyncio.create_task(_gpu_poll_loop(app, settings.gpu_poll_interval)),
-        asyncio.create_task(
-            load_monitor_loop(app, registry, http_client, router_url, settings.load_poll_interval)
-        ),
-        asyncio.create_task(autoscaler_loop(app, manager, settings.autoscale_interval)),
-        asyncio.create_task(_audit_prune_loop(store, settings.audit_max_rows)),
-        asyncio.create_task(_config_versions_prune_loop(store, settings.config_versions_max)),
-    ]
-    logger.info("Reconciler + GPU poller + load monitor + autoscaler started")
+
+    # The singleton control loops run ONLY on the elected leader — two replicas
+    # running them would fight (dueling reconcile/autoscale, double pruning). In
+    # single-machine (SQLite) mode there's one replica, so it leads permanently
+    # and this behaves exactly as before.
+    leader_loops: list[asyncio.Task] = []
+
+    async def _on_acquire() -> None:
+        # Restore desired state on the leader only (a follower must not also start
+        # models). Skips anything adopt already found alive.
+        if settings.replay_desired:
+            await manager.replay_desired()
+        leader_loops[:] = [
+            asyncio.create_task(reconcile_loop(registry, http_client, settings, store, manager, notifier)),
+            asyncio.create_task(_gpu_poll_loop(app, settings.gpu_poll_interval)),
+            asyncio.create_task(
+                load_monitor_loop(app, registry, http_client, router_url, settings.load_poll_interval)
+            ),
+            asyncio.create_task(autoscaler_loop(app, manager, settings.autoscale_interval)),
+            asyncio.create_task(_audit_prune_loop(store, settings.audit_max_rows)),
+            asyncio.create_task(_config_versions_prune_loop(store, settings.config_versions_max)),
+        ]
+        logger.info("Control loops started (leader)")
+
+    async def _on_release() -> None:
+        for t in leader_loops:
+            t.cancel()
+        await asyncio.gather(*leader_loops, return_exceptions=True)
+        leader_loops.clear()
+        logger.info("Control loops stopped (no longer leader)")
+
+    elector = LeaderElector(
+        store, settings.instance_id, settings.leader_lease_ttl, _on_acquire, _on_release
+    )
+    app.state.leader = elector
+    elector_task = asyncio.create_task(elector.run())
 
     try:
         yield
     finally:
-        for t in tasks:
-            t.cancel()
-        for t in tasks:
-            try:
-                await t
-            except asyncio.CancelledError:
-                pass
+        await elector.stop()
+        elector_task.cancel()
+        try:
+            await elector_task
+        except asyncio.CancelledError:
+            pass
+        await _on_release()  # ensure loops are down even if we were never leader-clean
         await manager.stop_all()
         await http_client.aclose()
         await store.close()

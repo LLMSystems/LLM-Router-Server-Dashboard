@@ -7,6 +7,7 @@ deployment without code changes.
 from __future__ import annotations
 
 import os
+import socket
 from dataclasses import dataclass
 from typing import Optional
 
@@ -118,6 +119,11 @@ class BackendSettings:
     # admin_token, else a random per-process key (dev only; set it in prod).
     session_secret: str = ""
     session_ttl: int = 28_800  # 8h
+    # HA leader election (only meaningful with a shared Postgres store): this
+    # replica's id (lease holder) and the lease TTL. A peer steals an expired
+    # lease, so failover happens within ~ttl seconds.
+    instance_id: str = ""
+    leader_lease_ttl: float = 15.0
 
     @property
     def auth_enabled(self) -> bool:
@@ -171,6 +177,9 @@ class BackendSettings:
             oidc_default_role=os.environ.get("LLMOPS_OIDC_DEFAULT_ROLE", "viewer").strip(),
             session_secret=os.environ.get("LLMOPS_SESSION_SECRET", "").strip(),
             session_ttl=int(_env_float("LLMOPS_SESSION_TTL", 28_800)),
+            instance_id=os.environ.get("LLMOPS_INSTANCE_ID", "").strip()
+            or f"{socket.gethostname()}:{os.getpid()}",
+            leader_lease_ttl=_env_float("LLMOPS_LEADER_LEASE_TTL", 15.0),
             default_input_price=_env_float("LLMOPS_DEFAULT_INPUT_PRICE", 0.0),
             default_output_price=_env_float("LLMOPS_DEFAULT_OUTPUT_PRICE", 0.0),
             price_currency=os.environ.get("LLMOPS_PRICE_CURRENCY", "USD").strip() or "USD",

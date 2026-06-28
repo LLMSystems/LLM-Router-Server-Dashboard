@@ -172,6 +172,12 @@ CREATE TABLE IF NOT EXISTS instance_desired (
     desired    TEXT    NOT NULL,          -- running | asleep | stopped
     updated_at REAL    NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS leader_lease (
+    name        TEXT    PRIMARY KEY,      -- the elected role, e.g. 'control-plane'
+    holder      TEXT    NOT NULL,         -- replica id holding the lease
+    expires_at  REAL    NOT NULL          -- epoch; a peer may steal it once past
+);
 """
 
 # Columns added after the original schema shipped; applied on init() for DBs
@@ -658,6 +664,46 @@ class LLMOpsStore:
     async def delete_instance_desired(self, key: str) -> None:
         await self._db.execute("DELETE FROM instance_desired WHERE key = ?", (key,))
         await self._db.commit()
+
+    # ---- Leader election (lease) ------------------------------------------
+
+    async def try_acquire_leader(self, name: str, holder: str, ttl: float,
+                                 ts: Optional[float] = None) -> bool:
+        """Atomically acquire-or-renew the `name` lease for `holder`. Succeeds when
+        the lease is free/expired or already ours; returns whether we hold it now.
+        The conditional upsert makes this race-safe across replicas (no split-brain
+        as long as clocks are roughly aligned and ttl > skew)."""
+        import time
+
+        now = ts if ts is not None else time.time()
+        await self._db.execute(
+            "INSERT INTO leader_lease (name, holder, expires_at) VALUES (?, ?, ?) "
+            "ON CONFLICT(name) DO UPDATE SET holder = excluded.holder, "
+            "expires_at = excluded.expires_at "
+            "WHERE leader_lease.expires_at < ? OR leader_lease.holder = ?",
+            (name, holder, now + ttl, now, holder),
+        )
+        await self._db.commit()
+        cur = await self._db.execute(
+            "SELECT holder, expires_at FROM leader_lease WHERE name = ?", (name,)
+        )
+        row = await cur.fetchone()
+        return bool(row and row["holder"] == holder and row["expires_at"] > now)
+
+    async def release_leader(self, name: str, holder: str) -> bool:
+        """Give up the lease if we hold it (graceful shutdown -> instant failover)."""
+        cur = await self._db.execute(
+            "DELETE FROM leader_lease WHERE name = ? AND holder = ?", (name, holder)
+        )
+        await self._db.commit()
+        return cur.rowcount > 0
+
+    async def get_leader(self, name: str) -> Optional[dict]:
+        cur = await self._db.execute(
+            "SELECT name, holder, expires_at FROM leader_lease WHERE name = ?", (name,)
+        )
+        row = await cur.fetchone()
+        return dict(row) if row else None
 
     async def prune_audit(self, max_rows: int = 50_000) -> int:
         """Cap the audit table to its most recent ``max_rows`` rows. Returns the
