@@ -207,12 +207,19 @@ async def stop_model(key: str, manager: ModelManager = Depends(get_manager)):
 
 
 class AutoscaleRequest(BaseModel):
-    """Group autoscale policy from the UI. enabled=false (or omitted) turns it off;
-    only the operator-facing knobs are exposed — timings keep their defaults."""
+    """Group autoscale policy from the UI. enabled=false (or omitted) turns it off.
+    Basic knobs (min/max replicas) plus the advanced timing/threshold fields; any
+    field left None keeps the AutoscaleConfig default."""
     enabled: bool = False
     min_ready: int = Field(default=1, ge=0)
     max_ready: int | None = Field(default=None, ge=1)
     min_warm: int | None = Field(default=None, ge=0)
+    # Advanced (optional) — see AutoscaleConfig for semantics & defaults.
+    scale_up_waiting: float | None = Field(default=None, gt=0)
+    scale_up_window_s: float | None = Field(default=None, ge=0)
+    sleep_after_s: float | None = Field(default=None, ge=0)
+    stop_after_s: float | None = Field(default=None, ge=0)
+    cooldown_s: float | None = Field(default=None, ge=0)
 
 
 @router.put("/{group}/autoscale", dependencies=[Depends(require_admin)])
@@ -224,10 +231,13 @@ async def set_group_autoscale(
     payload = None
     if body.enabled:
         payload = {"enabled": True, "min_ready": body.min_ready}
-        if body.max_ready is not None:
-            payload["max_ready"] = body.max_ready
-        if body.min_warm is not None:
-            payload["min_warm"] = body.min_warm
+        for field in (
+            "max_ready", "min_warm", "scale_up_waiting", "scale_up_window_s",
+            "sleep_after_s", "stop_after_s", "cooldown_s",
+        ):
+            value = getattr(body, field)
+            if value is not None:
+                payload[field] = value
     try:
         return {"group": group, "autoscale": await manager.set_autoscale(group, payload)}
     except ModelNotFound:

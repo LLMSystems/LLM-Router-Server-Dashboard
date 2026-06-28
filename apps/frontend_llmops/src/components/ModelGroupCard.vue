@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { Box, ChevronDown, Gauge, Loader2, Play, Plus, Power, RotateCw, Shuffle, Sparkles, Square } from '@lucide/vue'
+import { Box, ChevronDown, ChevronRight, Gauge, Loader2, Play, Plus, Power, RotateCw, Shuffle, Sparkles, Square } from '@lucide/vue'
 import { useI18n } from 'vue-i18n'
 import Card from '@/components/ui/Card.vue'
 import Badge from '@/components/ui/Badge.vue'
@@ -38,6 +38,13 @@ const asOpen = ref(false)
 const asEnabled = ref(false)
 const asMinReady = ref(1)
 const asMaxReady = ref<number>(1)
+const asMinWarm = ref(1)
+const asScaleUpWaiting = ref(4)
+const asScaleUpWindow = ref(20)
+const asSleepAfter = ref(180)
+const asStopAfter = ref(900)
+const asCooldown = ref(60)
+const asShowAdvanced = ref(false)
 const asSaving = ref(false)
 
 function openAutoscale() {
@@ -45,6 +52,14 @@ function openAutoscale() {
   asEnabled.value = !!a?.enabled
   asMinReady.value = a?.min_ready ?? 1
   asMaxReady.value = a?.max_ready ?? props.instances.length
+  // Advanced — fall back to the AutoscaleConfig defaults when the group has none yet.
+  asMinWarm.value = a?.min_warm ?? 1
+  asScaleUpWaiting.value = a?.scale_up_waiting ?? 4
+  asScaleUpWindow.value = a?.scale_up_window_s ?? 20
+  asSleepAfter.value = a?.sleep_after_s ?? 180
+  asStopAfter.value = a?.stop_after_s ?? 900
+  asCooldown.value = a?.cooldown_s ?? 60
+  asShowAdvanced.value = false
   asOpen.value = true
 }
 
@@ -56,6 +71,12 @@ async function saveAutoscale() {
       enabled: asEnabled.value,
       min_ready: asMinReady.value,
       max_ready: asMaxReady.value,
+      min_warm: asMinWarm.value,
+      scale_up_waiting: asScaleUpWaiting.value,
+      scale_up_window_s: asScaleUpWindow.value,
+      sleep_after_s: asSleepAfter.value,
+      stop_after_s: asStopAfter.value,
+      cooldown_s: asCooldown.value,
     })
     await models.loadConfig()
     void models.refresh()
@@ -504,6 +525,49 @@ const startLockTitle = computed(() =>
           <span class="text-xs text-muted-foreground">{{ $t('modelGroup.maxReady') }}</span>
           <Input v-model.number="asMaxReady" type="number" min="1" class="mt-1" />
         </label>
+      </div>
+      <!-- Advanced timing / threshold knobs -->
+      <div :class="!asEnabled && 'pointer-events-none opacity-50'">
+        <button
+          type="button"
+          class="flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground"
+          @click="asShowAdvanced = !asShowAdvanced"
+        >
+          <ChevronRight class="size-3 transition-transform" :class="asShowAdvanced && 'rotate-90'" />
+          {{ $t('modelGroup.autoscaleAdvanced') }}
+        </button>
+        <div v-if="asShowAdvanced" class="mt-3 grid grid-cols-2 gap-3">
+          <label>
+            <span class="text-xs text-muted-foreground">{{ $t('modelGroup.minWarm') }}</span>
+            <Input v-model.number="asMinWarm" type="number" min="0" class="mt-1" />
+            <span class="text-[10px] text-muted-foreground">{{ $t('modelGroup.minWarmHint') }}</span>
+          </label>
+          <label>
+            <span class="text-xs text-muted-foreground">{{ $t('modelGroup.scaleUpWaiting') }}</span>
+            <Input v-model.number="asScaleUpWaiting" type="number" min="0.1" step="0.1" class="mt-1" />
+            <span class="text-[10px] text-muted-foreground">{{ $t('modelGroup.scaleUpWaitingHint') }}</span>
+          </label>
+          <label>
+            <span class="text-xs text-muted-foreground">{{ $t('modelGroup.scaleUpWindow') }}</span>
+            <Input v-model.number="asScaleUpWindow" type="number" min="0" class="mt-1" />
+            <span class="text-[10px] text-muted-foreground">{{ $t('modelGroup.scaleUpWindowHint') }}</span>
+          </label>
+          <label>
+            <span class="text-xs text-muted-foreground">{{ $t('modelGroup.cooldown') }}</span>
+            <Input v-model.number="asCooldown" type="number" min="0" class="mt-1" />
+            <span class="text-[10px] text-muted-foreground">{{ $t('modelGroup.cooldownHint') }}</span>
+          </label>
+          <label>
+            <span class="text-xs text-muted-foreground">{{ $t('modelGroup.sleepAfter') }}</span>
+            <Input v-model.number="asSleepAfter" type="number" min="0" class="mt-1" />
+            <span class="text-[10px] text-muted-foreground">{{ $t('modelGroup.sleepAfterHint') }}</span>
+          </label>
+          <label>
+            <span class="text-xs text-muted-foreground">{{ $t('modelGroup.stopAfter') }}</span>
+            <Input v-model.number="asStopAfter" type="number" min="0" class="mt-1" />
+            <span class="text-[10px] text-muted-foreground">{{ $t('modelGroup.stopAfterHint') }}</span>
+          </label>
+        </div>
       </div>
       <div class="flex justify-end gap-2">
         <Button variant="outline" size="sm" @click="asOpen = false">{{ $t('common.cancel') }}</Button>

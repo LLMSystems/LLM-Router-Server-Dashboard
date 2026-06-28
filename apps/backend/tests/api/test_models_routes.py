@@ -20,6 +20,52 @@ def test_manual_start_stop_blocked_on_autoscaled_group(client):
         manager.config.LLM_engines["Qwen3-0.6B"].autoscale = None
 
 
+def test_set_autoscale_forwards_advanced_knobs(client, monkeypatch):
+    """The PUT endpoint builds a payload carrying the advanced timing/threshold
+    fields, not just min/max — each one reaches manager.set_autoscale."""
+    captured = {}
+
+    async def fake_set_autoscale(group, payload):
+        captured["group"] = group
+        captured["payload"] = payload
+        return payload
+
+    monkeypatch.setattr(client.app.state.manager, "set_autoscale", fake_set_autoscale)
+    resp = client.put(
+        "/api/models/Qwen3-0.6B/autoscale",
+        json={
+            "enabled": True, "min_ready": 1, "max_ready": 3, "min_warm": 2,
+            "scale_up_waiting": 6.5, "scale_up_window_s": 30, "cooldown_s": 45,
+            "sleep_after_s": 120, "stop_after_s": 600,
+        },
+    )
+    assert resp.status_code == 200
+    p = captured["payload"]
+    assert captured["group"] == "Qwen3-0.6B"
+    assert p == {
+        "enabled": True, "min_ready": 1, "max_ready": 3, "min_warm": 2,
+        "scale_up_waiting": 6.5, "scale_up_window_s": 30, "cooldown_s": 45,
+        "sleep_after_s": 120, "stop_after_s": 600,
+    }
+
+
+def test_set_autoscale_omits_unset_advanced_knobs(client, monkeypatch):
+    """Fields left out keep the schema defaults — the route must not inject them."""
+    captured = {}
+
+    async def fake_set_autoscale(group, payload):
+        captured["payload"] = payload
+        return payload
+
+    monkeypatch.setattr(client.app.state.manager, "set_autoscale", fake_set_autoscale)
+    resp = client.put(
+        "/api/models/Qwen3-0.6B/autoscale",
+        json={"enabled": True, "min_ready": 2},
+    )
+    assert resp.status_code == 200
+    assert captured["payload"] == {"enabled": True, "min_ready": 2}
+
+
 def test_list_models_returns_all_configured_instances(client):
     resp = client.get("/api/models")
     assert resp.status_code == 200

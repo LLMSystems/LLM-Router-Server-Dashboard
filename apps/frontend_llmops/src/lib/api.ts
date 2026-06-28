@@ -140,7 +140,17 @@ export const api = {
   /** Enable/disable + tune a group's autoscaling (no stop required). */
   setAutoscale: (
     group: string,
-    body: { enabled: boolean; min_ready?: number; max_ready?: number | null },
+    body: {
+      enabled: boolean
+      min_ready?: number
+      max_ready?: number | null
+      min_warm?: number | null
+      scale_up_waiting?: number | null
+      scale_up_window_s?: number | null
+      sleep_after_s?: number | null
+      stop_after_s?: number | null
+      cooldown_s?: number | null
+    },
   ) =>
     request<{ group: string; autoscale: AutoscaleConfig | null }>(
       API_BASE,
