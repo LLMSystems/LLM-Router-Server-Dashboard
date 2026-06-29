@@ -1,0 +1,22 @@
+# "Collapsed" profile — the simplest working deploy: one backend (does everything),
+# one router, the bundled Postgres. Good for a single GPU node / kicking the tyres.
+#
+#   helm install vllmux ./deploy/helm/vllmux -f deploy/helm/vllmux/values-collapsed.yaml \
+#     --set secrets.adminToken=$(openssl rand -hex 16) \
+#     --set postgres.password=$(openssl rand -hex 16) \
+#     --set secrets.hfToken=hf_xxx
+
+backend:
+  replicas: 1
+  gpu: 1
+
+router:
+  replicas: 1
+  workers: 2
+
+postgres:
+  enabled: true
+  storage: 10Gi
+
+ingress:
+  enabled: false

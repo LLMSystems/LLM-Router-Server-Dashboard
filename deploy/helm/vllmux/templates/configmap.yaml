@@ -1,0 +1,11 @@
+{{- if not .Values.config.existingConfigMap }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "vllmux.configMapName" . }}
+  labels:
+    {{- include "vllmux.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+{{ .Values.config.inline | indent 4 }}
+{{- end }}

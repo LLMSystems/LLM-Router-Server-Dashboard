@@ -1,0 +1,184 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "vllmux.fullname" . }}-backend
+  labels:
+    {{- include "vllmux.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backend
+spec:
+  type: {{ .Values.backend.service.type }}
+  selector:
+    {{- include "vllmux.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backend
+  ports:
+    - name: api
+      port: {{ .Values.backend.service.port }}
+      targetPort: 5000
+---
+# Headless service so each backend pod gets a stable DNS name (pod-0, pod-1, …),
+# matching its stable LLMOPS_INSTANCE_ID / node identity.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "vllmux.fullname" . }}-backend-headless
+  labels:
+    {{- include "vllmux.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backend
+spec:
+  clusterIP: None
+  selector:
+    {{- include "vllmux.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backend
+  ports:
+    - name: api
+      port: 5000
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "vllmux.fullname" . }}-backend
+  labels:
+    {{- include "vllmux.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backend
+spec:
+  serviceName: {{ include "vllmux.fullname" . }}-backend-headless
+  replicas: {{ .Values.backend.replicas }}
+  selector:
+    matchLabels:
+      {{- include "vllmux.labels" . | nindent 6 }}
+      app.kubernetes.io/component: backend
+  template:
+    metadata:
+      labels:
+        {{- include "vllmux.labels" . | nindent 8 }}
+        app.kubernetes.io/component: backend
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      terminationGracePeriodSeconds: {{ .Values.backend.terminationGracePeriodSeconds }}
+      containers:
+        - name: backend
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          workingDir: /app/apps/backend
+          command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "5000"]
+          ports:
+            - name: api
+              containerPort: 5000
+          env:
+            {{- if .Values.postgres.enabled }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vllmux.secretName" . }}
+                  key: postgres-password
+            {{- end }}
+            {{- $db := include "vllmux.dbUrl" . }}
+            {{- if $db }}
+            - name: LLMOPS_DB_URL
+              value: {{ $db | quote }}
+            {{- end }}
+            - name: LLMOPS_ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vllmux.secretName" . }}
+                  key: admin-token
+            - name: LLMOPS_SESSION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vllmux.secretName" . }}
+                  key: session-secret
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vllmux.secretName" . }}
+                  key: hf-token
+            # Stable per-pod identity (pod name) for the leader lease, node registry
+            # and assignments — avoids the ephemeral hostname:pid default.
+            - name: LLMOPS_INSTANCE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            # Routable address this pod advertises for its vLLMs (other pods connect
+            # here). Pairs with bindAll so vLLM listens on 0.0.0.0.
+            - name: LLMOPS_NODE_HOST
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            {{- if .Values.backend.bindAll }}
+            - name: LLMOPS_VLLM_BIND_HOST
+              value: "0.0.0.0"
+            {{- end }}
+            - name: LLMOPS_REPLAY_DESIRED
+              value: {{ .Values.backend.replayDesired | quote }}
+            - name: LLM_ROUTER_SERVER_CONFIG_PATH
+              value: /app/packages/config-schema/config.yaml
+            - name: LLMOPS_OVERLAY_PATH
+              value: /app/data/dynamic_models.json
+            - name: LLMOPS_DB_PATH
+              value: /app/data/llmops.db
+            - name: HF_HOME
+              value: /hf
+            {{- with .Values.backend.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          volumeMounts:
+            - name: config
+              mountPath: /app/packages/config-schema/config.yaml
+              subPath: config.yaml
+            - name: data
+              mountPath: /app/data
+            {{- if .Values.backend.hfCache.enabled }}
+            - name: hf-cache
+              mountPath: /hf
+            {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 5000
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          resources:
+            requests:
+              {{- toYaml .Values.backend.resources.requests | nindent 14 }}
+            limits:
+              {{- toYaml .Values.backend.resources.limits | nindent 14 }}
+              nvidia.com/gpu: {{ .Values.backend.gpu }}
+      {{- with .Values.backend.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.backend.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.backend.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "vllmux.configMapName" . }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: {{ .Values.backend.dataSize | quote }}
+    {{- if .Values.backend.hfCache.enabled }}
+    - metadata:
+        name: hf-cache
+      spec:
+        accessModes: ["{{ .Values.backend.hfCache.accessMode }}"]
+        {{- if .Values.backend.hfCache.storageClass }}
+        storageClassName: {{ .Values.backend.hfCache.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.backend.hfCache.size | quote }}
+    {{- end }}

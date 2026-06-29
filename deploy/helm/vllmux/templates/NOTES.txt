@@ -1,0 +1,40 @@
+vLLMux is installed as release "{{ .Release.Name }}".
+
+Components:
+  backend  StatefulSet  {{ .Values.backend.replicas }} replica(s), {{ .Values.backend.gpu }} GPU each
+  router   Deployment   {{ .Values.router.replicas }} replica(s), {{ .Values.router.workers }} workers each
+{{- if .Values.postgres.enabled }}
+  postgres StatefulSet  bundled shared store
+{{- else if .Values.externalDbUrl }}
+  store    external Postgres (externalDbUrl)
+{{- else }}
+  store    SQLite (single-pod only — NOT valid for replicas > 1)
+{{- end }}
+
+Reach it:
+{{- if .Values.ingress.enabled }}
+  Ingress host: http://{{ .Values.ingress.host }}/v1   (inference)
+                http://{{ .Values.ingress.host }}/api  (control-plane API)
+{{- else }}
+  # Router (OpenAI/Anthropic API):
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "vllmux.fullname" . }}-router {{ .Values.router.service.port }}:{{ .Values.router.service.port }}
+  curl localhost:{{ .Values.router.service.port }}/v1/models
+  # Backend (dashboard API):
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "vllmux.fullname" . }}-backend {{ .Values.backend.service.port }}:{{ .Values.backend.service.port }}
+{{- end }}
+
+Scale routers (stateless, safe any time):
+  kubectl -n {{ .Release.Namespace }} scale deploy/{{ include "vllmux.fullname" . }}-router --replicas=N
+
+{{- if gt (int .Values.backend.replicas) 1 }}
+
+NOTE: backend.replicas={{ .Values.backend.replicas }} gives control-plane HA (warm
+standby): every replica serves the read API from the shared DB, but only the
+leader runs the control loops + spawns models. It is failover, not parallel GPU
+workers — true multi-GPU-node spread is future work.
+{{- end }}
+{{- if and (not .Values.postgres.enabled) (not .Values.externalDbUrl) }}
+
+WARNING: no shared store configured (SQLite). Set postgres.enabled=true or
+externalDbUrl before running more than one replica of anything.
+{{- end }}

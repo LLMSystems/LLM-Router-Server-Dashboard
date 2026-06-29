@@ -1,0 +1,119 @@
+# Default values for the vLLMux control-plane chart.
+# Two ready-made profiles ship alongside this file:
+#   helm install vllmux ./deploy/helm/vllmux -f deploy/helm/vllmux/values-collapsed.yaml
+#   helm install vllmux ./deploy/helm/vllmux -f deploy/helm/vllmux/values-split.yaml
+
+# The single image used by both backend and router (built from deploy/Dockerfile
+# as `llmops-engine`). Push it to a registry your cluster can pull.
+image:
+  repository: llmops-engine
+  tag: latest
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+# ---- Secrets ----------------------------------------------------------------
+# Provide these here (chart creates a Secret) or point existingSecret at your own
+# Secret with keys: admin-token, session-secret, hf-token, postgres-password.
+secrets:
+  adminToken: ""        # LLMOPS_ADMIN_TOKEN — REQUIRED for a protected deploy
+  sessionSecret: ""     # LLMOPS_SESSION_SECRET (SSO/cookie signing); blank = derived
+  hfToken: ""           # HF_TOKEN for gated model downloads
+  existingSecret: ""    # use this Secret instead of the three values above
+
+# ---- config.yaml ------------------------------------------------------------
+# Mounted into both backend and router at /app/packages/config-schema/config.yaml.
+# Replace `inline` with your fleet, or set existingConfigMap to mount your own.
+config:
+  existingConfigMap: ""
+  inline: |
+    server:
+      host: "0.0.0.0"
+      port: 8887
+    LLM_engines: {}
+
+# ---- Backend (model lifecycle + leader-elected control plane) ----------------
+backend:
+  # replicas > 1 = control-plane HA: every replica serves the read API from the
+  # shared DB, but only the leader runs the control loops + spawns models. It is a
+  # warm standby for failover, NOT parallel GPU workers (each replica still needs a
+  # GPU to be able to take over). True multi-GPU-node spread is future work.
+  replicas: 1
+  # GPUs requested per backend pod (the vLLM instances it spawns run in-pod).
+  gpu: 1
+  # Bind spawned vLLMs to 0.0.0.0 so router pods (a different pod/netns) can reach
+  # them; their address is advertised to the store as the pod IP (LLMOPS_NODE_HOST).
+  # Required on k8s, where the router is always a separate pod. Trusted network only.
+  bindAll: true
+  replayDesired: true   # restart models that were running, on (re)start / failover
+  resources:
+    requests:
+      cpu: "2"
+      memory: 8Gi
+    limits:
+      memory: 24Gi
+  # HuggingFace weight cache. ReadWriteMany lets replicas share it; otherwise each
+  # backend pod gets its own copy.
+  hfCache:
+    enabled: true
+    storageClass: ""
+    accessMode: ReadWriteOnce
+    size: 100Gi
+  # Per-pod scratch for the overlay file + KV-cache (the DB is the real source).
+  dataSize: 1Gi
+  service:
+    type: ClusterIP
+    port: 5000
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  terminationGracePeriodSeconds: 120   # let in-flight model stops/drains finish
+  extraEnv: []
+
+# ---- Router (stateless OpenAI/Anthropic gateway) -----------------------------
+router:
+  # Genuine horizontal scale — stateless replicas behind the Service, each reading
+  # the overlay + live instance addresses + drain marks from the shared store.
+  replicas: 2
+  workers: 4            # gunicorn workers per pod (ROUTER_WORKERS)
+  authRequired: false   # LLMOPS_ROUTER_AUTH_REQUIRED — require a bearer token on /v1
+  resources:
+    requests:
+      cpu: "500m"
+      memory: 512Mi
+    limits:
+      memory: 2Gi
+  service:
+    type: ClusterIP
+    port: 8887
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  terminationGracePeriodSeconds: 60
+  extraEnv: []
+
+# ---- Shared store: bundled Postgres, or bring your own DSN -------------------
+postgres:
+  enabled: true
+  image: postgres:16
+  user: llmops
+  password: ""          # REQUIRED when enabled (or set secrets.existingSecret)
+  database: llmops
+  storageClass: ""
+  storage: 10Gi
+  resources:
+    requests:
+      cpu: "500m"
+      memory: 512Mi
+# Used when postgres.enabled=false — point at a managed/external Postgres.
+externalDbUrl: ""       # postgresql://user:pass@host:5432/llmops
+
+# ---- Ingress (routes /api -> backend, /v1 -> router) ------------------------
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  host: vllmux.local
+  tls: []
