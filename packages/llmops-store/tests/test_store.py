@@ -39,6 +39,31 @@ async def store(request, tmp_path):
     await s.close()
 
 
+@pytest.mark.asyncio
+async def test_concurrent_schema_init_on_postgres():
+    """HA regression: several workers/replicas booting at once each call init().
+    `CREATE TABLE IF NOT EXISTS` isn't concurrency-safe on Postgres (it races the
+    pg_type catalog) — without serialisation one boot crashes with a duplicate-key
+    error. The driver's advisory lock must let all of them succeed. PG-only."""
+    url = os.environ.get("LLMOPS_TEST_DB_URL")
+    if not url:
+        pytest.skip("set LLMOPS_TEST_DB_URL to run the Postgres concurrency test")
+    import asyncio
+
+    import asyncpg
+
+    conn = await asyncpg.connect(url)  # fresh schema so init() really CREATEs tables
+    await conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
+    await conn.close()
+
+    async def boot():
+        s = await LLMOpsStore(db_url=url).init()
+        await s.close()
+
+    # Must not raise UniqueViolationError on any of the concurrent initializers.
+    await asyncio.gather(*(boot() for _ in range(8)))
+
+
 def test_percentile_nearest_rank():
     vals = [10, 20, 30, 40, 50]
     assert _percentile(vals, 50) == 30

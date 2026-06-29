@@ -175,10 +175,23 @@ class PgDriver:
             status = await conn.execute(tsql, *params)
             return _PgCursor([], _rowcount_from_status(status))
 
+    # Fixed key for the schema-init advisory lock (any constant bigint).
+    _SCHEMA_LOCK_KEY = 0x6C4C4D53  # "lLMS"
+
     async def executescript(self, script: str) -> None:
         async with self._pool.acquire() as conn:
-            for stmt in split_statements(dialectize_schema_pg(script)):
-                await conn.execute(stmt)
+            # `CREATE TABLE IF NOT EXISTS` is NOT concurrency-safe on Postgres: when
+            # several sessions run it at once (multiple gunicorn workers / replicas
+            # booting together) they race on the system catalog and one fails with a
+            # duplicate pg_type/relation error. Serialise all initializers behind a
+            # session advisory lock — the first creates the schema, the rest then
+            # no-op on IF NOT EXISTS. (SQLite doesn't need this; single writer.)
+            await conn.execute("SELECT pg_advisory_lock($1)", self._SCHEMA_LOCK_KEY)
+            try:
+                for stmt in split_statements(dialectize_schema_pg(script)):
+                    await conn.execute(stmt)
+            finally:
+                await conn.execute("SELECT pg_advisory_unlock($1)", self._SCHEMA_LOCK_KEY)
 
     async def insert(self, sql: str, params=()) -> int:
         tsql = translate_placeholders(sql)
