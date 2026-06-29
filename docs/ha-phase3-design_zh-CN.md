@@ -185,22 +185,27 @@ desired,不再直接碰進程。**單機先 collapsed**(agent 與控制平面同
 
 > 起手式建議:**3a**…(已完成)。
 
-## 實作狀態與唯一剩下的硬限制（2026-06）
+## 實作狀態（2026-06）
 
-3a–3e 全部落地、SQLite + Postgres 雙跑測試通過、單機 collapsed 行為逐位元不變,並做了
+3a–3e **全部落地**、SQLite + Postgres 雙跑測試通過、單機 collapsed 行為逐位元不變,並做了
 **雙 backend 副本**(follower 從 DB 讀 fleet)與**雙 router 副本**(共享 store 讀路由)的 live 驗證。
 
-**唯一還沒解的硬限制**:vLLM 仍以 `--host localhost` 綁在 backend 的 netns 內(launcher 沿用
-config 的 host)。所以「另一個 netns / 另一台機器的 router 或 node-agent」雖然能從 DB 讀到實例位址,
-卻仍連不到只綁 localhost 的 vLLM。要真正多節點 inference,還需要:
+**netns 解耦也完成了**:`LLMOPS_VLLM_BIND_HOST`(opt-in,預設空=綁 localhost 不變)讓 vLLM 綁可路由
+介面(如 `0.0.0.0`),搭配 `LLMOPS_NODE_HOST`(廣播給 router 連的可路由位址,寫進 `instances_live`)。
+只改 `--host` 綁定位址;本機健康探針與 record 仍走 localhost。**已 docker live 驗**:bind=0.0.0.0 +
+node_host=backend 時,vLLM 廣播 `backend:8002`,**別的 netns 的容器連得到 `/health`,而且一個獨立 netns
+(不共享 backend)的第二個 router 能真的跑通 `/v1/chat/completions`** —— 即「跨 netns inference」這件
+原本做不到的事現在 work 了。
 
-1. **node-agent 把 vLLM 綁在可路由位址**(node IP / `0.0.0.0`,非 `localhost`),並以該位址寫入
-   `instances_live`(`LLMOPS_NODE_HOST` 已預留)。這是把 actuation 真正搬到每個 node 的最後一步
-   (3b 的 collapsed→split 切換),牽涉改 launcher 的 `--host` 與安全考量(綁 0.0.0.0)。
-2. 在有第二台 GPU 主機時才有意義、也才測得起來;單機無法驗證(GPU-less 副本無法真的起模型)。
+**剩下純屬部署形態,非控制平面邏輯**:
+1. 真・多節點 inference 還需要**真實的多 GPU 主機**才測得起來、才有意義(單機 GPU-less 副本起不了模型)。
+2. **3f**(Helm/k8s manifests)把上述角色打包成 Deployment/DaemonSet/Service —— 一鍵多節點,待有 cluster
+   再做。
 
-換言之:**控制平面 HA(狀態外移、leader、雙副本讀寫、排程、router 水平擴)已完備且驗過;
-剩下純粹是「把 vLLM 綁到可跨網位址」這一步 + 真實多 GPU 主機環境**,屬部署形態而非控制平面邏輯。
+換言之:**控制平面 HA(狀態外移、leader、雙副本讀寫、跨節點排程、router 水平擴、vLLM 可路由綁定)
+全部完成且驗過**;只差「真多 GPU 主機 + k8s 打包(3f)」這層部署形態。
+
+> ⚠️ 綁 `0.0.0.0` 會把 vLLM 暴露到 localhost 以外,只在可信/內網環境使用。
 
 > **節點身分建議**:多節點部署請給每台設**穩定**的 `LLMOPS_INSTANCE_ID`(預設 `hostname:pid` 會
 > 隨重啟改變)。assignments 已對「指派到已死節點」做自癒回收,但穩定 id 讓 nodes/leader/assignment
