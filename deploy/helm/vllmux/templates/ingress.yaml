@@ -1,0 +1,40 @@
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "vllmux.fullname" . }}
+  labels:
+    {{- include "vllmux.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if .Values.ingress.className }}
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- end }}
+  {{- with .Values.ingress.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          # OpenAI/Anthropic inference -> the stateless router replicas.
+          - path: /v1
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "vllmux.fullname" . }}-router
+                port:
+                  number: {{ .Values.router.service.port }}
+          # Dashboard / control-plane API -> the backend.
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "vllmux.fullname" . }}-backend
+                port:
+                  number: {{ .Values.backend.service.port }}
+{{- end }}

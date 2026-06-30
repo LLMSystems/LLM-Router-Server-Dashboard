@@ -39,6 +39,7 @@ from app.core.store import LLMOpsStore
 from app.llmops.launchers import EmbeddingLauncher, VllmLauncher
 from app.llmops.manager import ModelManager, build_registry
 from app.llmops.autoscaler import autoscaler_loop
+from app.llmops.scheduler import Scheduler
 from app.llmops.load_monitor import load_monitor_loop
 from app.llmops.notifier import build_notifier, refresh_sinks
 from app.llmops.reconciler import adopt_running, reconcile_loop
@@ -195,6 +196,9 @@ async def lifespan(app: FastAPI):
                 load_monitor_loop(app, registry, http_client, router_url, settings.load_poll_interval)
             ),
             asyncio.create_task(autoscaler_loop(app, manager, settings.autoscale_interval)),
+            asyncio.create_task(
+                Scheduler().run(store, settings, settings.schedule_interval)
+            ),
             asyncio.create_task(_audit_prune_loop(store, settings.audit_max_rows)),
             asyncio.create_task(_config_versions_prune_loop(store, settings.config_versions_max)),
         ]
@@ -213,9 +217,23 @@ async def lifespan(app: FastAPI):
     app.state.leader = elector
     elector_task = asyncio.create_task(elector.run())
 
+    # HA Phase 3b: node-agent heartbeat. Runs on every replica (NOT leader-gated) —
+    # each host must announce itself + its capacity regardless of who holds the
+    # scheduler lease. Collapsed single-host: one node registering itself. No-op
+    # when the store can't track nodes (older SQLite).
+    from app.llmops.node_agent import NodeAgent
+    node_agent = NodeAgent(store, settings)
+    app.state.node_agent = node_agent
+    node_agent_task = asyncio.create_task(node_agent.run())
+
     try:
         yield
     finally:
+        node_agent_task.cancel()
+        try:
+            await node_agent_task
+        except asyncio.CancelledError:
+            pass
         await elector.stop()
         elector_task.cancel()
         try:

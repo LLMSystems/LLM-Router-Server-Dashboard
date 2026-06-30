@@ -169,6 +169,39 @@ class ModelManager:
             await self.store.set_instance_desired(key, desired)
         except Exception:
             logger.warning("Failed to persist desired=%s for %s", desired, key, exc_info=True)
+        # HA Phase 3b: claim this instance for this node when it should be live
+        # (running/asleep). Collapsed = the single local node owns everything; the
+        # scheduler (3c) will instead place it across nodes. Best-effort.
+        if desired != Desired.STOPPED.value and hasattr(self.store, "set_assignment"):
+            try:
+                await self.store.set_assignment(key, self.settings.instance_id)
+            except Exception:
+                logger.warning("Failed to assign %s to this node", key, exc_info=True)
+
+    async def foreign_assignments(self) -> set[str]:
+        """Keys assigned to a *different, currently-alive* node — this node-agent
+        must not actuate them (their owning agent does). Empty on a single host, so
+        collapsed behaviour is unchanged.
+
+        An assignment only counts as foreign if its node is alive (heartbeating in
+        the nodes registry). One pointing at a vanished node — e.g. this host's own
+        previous, ephemeral id after a restart, or a node that died — is reclaimable
+        and NOT foreign, so actuation self-heals instead of stalling forever.
+        Best-effort: any store issue yields an empty set (actuate as before)."""
+        if self.store is None or not hasattr(self.store, "list_assignments"):
+            return set()
+        try:
+            amap = await self.store.list_assignments()
+        except Exception:
+            return set()
+        me = self.settings.instance_id
+        alive: set[str] = set()
+        if hasattr(self.store, "list_nodes"):
+            try:
+                alive = {n["node_id"] for n in await self.store.list_nodes()}
+            except Exception:
+                alive = set()
+        return {k for k, n in amap.items() if n != me and n in alive}
 
     async def replay_desired(self) -> None:
         """On boot (after adopt_running): start instances whose persisted desired is
@@ -182,9 +215,12 @@ class ModelManager:
         except Exception:
             logger.warning("Failed to read desired state for replay", exc_info=True)
             return
+        # HA Phase 3b: don't replay instances owned by another node-agent — their
+        # node restores them. Empty on a single host, so collapsed is unchanged.
+        foreign = await self.foreign_assignments()
         for key, want in desired.items():
             inst = self.registry.get(key)
-            if inst is None or want != Desired.RUNNING.value:
+            if inst is None or want != Desired.RUNNING.value or key in foreign:
                 continue
             if inst.state in (ModelState.STOPPED, ModelState.FAILED):
                 try:
@@ -227,6 +263,27 @@ class ModelManager:
 
     async def list(self) -> list[ModelInstance]:
         return await self.registry.snapshot()
+
+    async def fleet_views(self, prefer_store: bool = False) -> list[dict]:
+        """The fleet's model-view dicts. Leader (prefer_store=False): from the live
+        local registry — identical to before. Follower (prefer_store=True): the
+        shared store's observed state (the owning agents backfill it) layered over
+        the local registry, so a non-leader control-plane replica reports the real
+        fleet instead of its own idle registry (HA Phase 3d). Falls back to the
+        registry for any instance the store hasn't backfilled."""
+        node_id = self.settings.instance_id
+        base: dict[str, dict] = {}
+        for inst in await self.registry.snapshot():
+            v = inst.observed_dict()
+            v["node_id"] = node_id
+            base[inst.key] = v
+        if prefer_store and self.store is not None and hasattr(self.store, "list_instance_observed"):
+            try:
+                for v in await self.store.list_instance_observed():
+                    base[v["key"]] = v
+            except Exception:
+                logger.warning("fleet_views: failed to read observed from store", exc_info=True)
+        return list(base.values())
 
     async def get(self, key: str) -> ModelInstance:
         return self._require(key)
@@ -799,6 +856,11 @@ class ModelManager:
                 await self.store.delete_instance_desired(key)
             except Exception:
                 logger.warning("Failed to clear desired for deleted %s", key, exc_info=True)
+            if hasattr(self.store, "delete_assignment"):
+                try:
+                    await self.store.delete_assignment(key)
+                except Exception:
+                    logger.warning("Failed to clear assignment for deleted %s", key, exc_info=True)
         logger.info("Deleted dynamic model %s", key)
 
     # -- Config export / import (versioning) ----------------------------------
@@ -845,14 +907,21 @@ class ModelManager:
             inst.model_tag, inst.log_path = spec.model_tag, spec.log_path
         return {"added": added, "removed": removed, "changed": changed}
 
-    async def import_overlay(self, overlay: dict, *, force: bool = False) -> dict[str, list[str]]:
+    async def import_overlay(
+        self, overlay: dict, *, force: bool = False,
+        actor: Optional[str] = None, role: Optional[str] = None,
+        summary: Optional[str] = None,
+    ) -> dict[str, list[str]]:
         """Replace the whole overlay with `overlay` (a backup or a past version).
 
         Validates the merged result first; then unless `force`, refuses if any
         instance whose definition would be removed or changed is still running
         (a launch-param change under a live process would silently drift). With
         `force`, those instances are stopped first so nothing is orphaned.
-        Returns the {added, removed, changed} key summary."""
+        Returns the {added, removed, changed} key summary.
+
+        `actor`/`role`/`summary` attribute the resulting config-version snapshot
+        (see below)."""
         from app.services.overlay import build_merged_config, save_overlay
 
         if not isinstance(overlay, dict):
@@ -883,11 +952,25 @@ class ModelManager:
 
         save_overlay(overlay, self.overlay_path)
         self.config = new_config
+        # HA: persist this overlay to the shared DB as the new current snapshot
+        # BEFORE reloading the router. The backend and router share the overlay
+        # file, and the router's /reload re-hydrates that file from the DB's latest
+        # snapshot — so if the DB still held the *previous* overlay, the reload would
+        # immediately clobber this import (and the request middleware, seeing the
+        # file revert, would never snapshot it). No-op in SQLite mode, where the
+        # file is the source of truth and the middleware snapshots it post-request.
+        if getattr(self.store, "db_url", None) is not None:
+            try:
+                from app.core.config_versioning import snapshot_overlay
+                await snapshot_overlay(self.store, actor=actor, role=role,
+                                       summary=summary, path=self.overlay_path)
+            except Exception:
+                logger.warning("import_overlay: failed to snapshot overlay to DB", exc_info=True)
         async with self.registry.lock:
-            summary = self.resync_registry(new_config)
+            summary_keys = self.resync_registry(new_config)
         await self.trigger_router_reload()
-        logger.info("Imported overlay: %s", summary)
-        return summary
+        logger.info("Imported overlay: %s", summary_keys)
+        return summary_keys
 
     async def stop_all(self) -> None:
         """Best-effort shutdown of every managed process (used at app shutdown)."""

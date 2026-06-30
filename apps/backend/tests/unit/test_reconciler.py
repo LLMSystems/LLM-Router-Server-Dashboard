@@ -44,6 +44,100 @@ async def test_starting_becomes_ready_when_health_ok():
     assert inst.ready_at is not None
 
 
+class _LiveStore:
+    """Captures the instances_live (3a) + instance_observed (3d) backfill."""
+
+    def __init__(self):
+        self.live: dict[str, dict] = {}
+        self.observed: dict[str, dict] = {}
+
+    async def record_model_event(self, *a, **k):  # _persist calls this; no-op
+        pass
+
+    async def upsert_instance_live(self, key, group_key, instance_id, host, port,
+                                   ttl, node_id=None, state=None, ts=None):
+        self.live[key] = {"group_key": group_key, "instance_id": instance_id,
+                          "host": host, "port": port, "state": state, "node_id": node_id}
+
+    async def remove_instance_live(self, key):
+        self.live.pop(key, None)
+
+    async def upsert_instance_observed(self, key, node_id, state, view, ttl, ts=None):
+        import json
+        self.observed[key] = json.loads(view)
+
+    async def prune_instance_observed(self, ts=None):
+        return 0
+
+
+async def test_ready_instance_publishes_live_address():
+    reg = _registry()
+    inst = reg.get(HEALTHY)
+    inst.state = ModelState.STARTING
+    inst.managed = True
+    inst.proc = FakeProc()
+    inst.started_at = time.time()
+    store = _LiveStore()
+
+    await reconcile_once(reg, FakeHTTPClient(healthy_ports={8002}), _settings(), store=store)
+    assert inst.state == ModelState.READY
+    pub = store.live[HEALTHY]
+    assert pub["group_key"] == "Qwen3-0.6B" and pub["instance_id"] == "qwen3"
+    assert (pub["host"], pub["port"]) == (inst.host, inst.port)
+    assert pub["state"] == "ready"
+
+
+async def test_observed_backfilled_for_all_states():
+    # HA Phase 3d: every instance (not just READY) is backfilled to instance_observed
+    # so any control-plane replica can read the full fleet from the DB.
+    reg = _registry()
+    healthy = reg.get(HEALTHY)
+    healthy.state = ModelState.STARTING
+    healthy.managed = True
+    healthy.proc = FakeProc()
+    healthy.started_at = time.time()
+    stopped = reg.get("Qwen3-0.6B::qwen3-2")  # stays STOPPED
+    store = _LiveStore()
+
+    await reconcile_once(reg, FakeHTTPClient(healthy_ports={8002}), _settings(), store=store)
+
+    # READY one is in both live + observed; the STOPPED one only in observed.
+    assert HEALTHY in store.live
+    assert store.observed[HEALTHY]["state"] == "ready"
+    assert store.observed[stopped.key]["state"] == "stopped"
+    assert stopped.key not in store.live  # not routable
+    assert store.observed[HEALTHY]["key"] == HEALTHY  # full view shape
+
+
+async def test_node_host_overrides_advertised_host():
+    reg = _registry()
+    inst = reg.get(HEALTHY)
+    inst.state = ModelState.READY
+    inst.managed = True
+    inst.proc = FakeProc()
+    store = _LiveStore()
+
+    settings = BackendSettings(node_host="10.0.0.7")
+    await reconcile_once(reg, FakeHTTPClient(healthy_ports={8002}), settings, store=store)
+    assert store.live[HEALTHY]["host"] == "10.0.0.7"
+
+
+async def test_leaving_ready_deregisters_live_address():
+    reg = _registry()
+    inst = reg.get(HEALTHY)
+    inst.state = ModelState.READY
+    inst.managed = True
+    # Process is dead -> READY transitions to FAILED; the live address must be
+    # removed so routers stop targeting it immediately (not wait for the TTL).
+    inst.proc = FakeProc(returncode=1)
+    store = _LiveStore()
+    store.live[HEALTHY] = {"stale": True}
+
+    await reconcile_once(reg, FakeHTTPClient(healthy_ports=set()), _settings(), store=store)
+    assert inst.state != ModelState.READY
+    assert HEALTHY not in store.live
+
+
 class _ReloadSpyManager:
     """Minimal manager stub capturing router-reload + Prometheus SD nudges."""
 
@@ -58,6 +152,9 @@ class _ReloadSpyManager:
     async def write_prometheus_targets(self):
         self.sd_writes += 1
         return True
+
+    async def foreign_assignments(self):
+        return set()
 
 
 async def test_ready_transition_nudges_router_reload():

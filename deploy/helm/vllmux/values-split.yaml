@@ -1,0 +1,36 @@
+# "Split" profile — HA: a warm-standby backend pair + several stateless router
+# replicas behind the Service, bundled Postgres, and an Ingress. Routers reach the
+# backend's vLLMs across pods via bindAll (0.0.0.0) + the advertised pod IP.
+#
+#   helm install vllmux ./deploy/helm/vllmux -f deploy/helm/vllmux/values-split.yaml \
+#     --set secrets.adminToken=$(openssl rand -hex 16) \
+#     --set postgres.password=$(openssl rand -hex 16) \
+#     --set secrets.hfToken=hf_xxx \
+#     --set ingress.host=vllmux.example.com
+
+backend:
+  replicas: 2          # control-plane HA (leader + warm standby)
+  gpu: 1
+  bindAll: true        # required so router pods can reach vLLM across pods
+  hfCache:
+    size: 200Gi
+
+router:
+  replicas: 3          # horizontal scale-out behind the Service
+  workers: 4
+  authRequired: true   # require a bearer token on /v1
+
+postgres:
+  enabled: true
+  storage: 20Gi
+  resources:
+    requests:
+      cpu: "1"
+      memory: 1Gi
+
+ingress:
+  enabled: true
+  className: nginx
+  host: vllmux.example.com
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"   # long LLM streams

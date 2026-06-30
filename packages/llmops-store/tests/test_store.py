@@ -39,6 +39,31 @@ async def store(request, tmp_path):
     await s.close()
 
 
+@pytest.mark.asyncio
+async def test_concurrent_schema_init_on_postgres():
+    """HA regression: several workers/replicas booting at once each call init().
+    `CREATE TABLE IF NOT EXISTS` isn't concurrency-safe on Postgres (it races the
+    pg_type catalog) — without serialisation one boot crashes with a duplicate-key
+    error. The driver's advisory lock must let all of them succeed. PG-only."""
+    url = os.environ.get("LLMOPS_TEST_DB_URL")
+    if not url:
+        pytest.skip("set LLMOPS_TEST_DB_URL to run the Postgres concurrency test")
+    import asyncio
+
+    import asyncpg
+
+    conn = await asyncpg.connect(url)  # fresh schema so init() really CREATEs tables
+    await conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
+    await conn.close()
+
+    async def boot():
+        s = await LLMOpsStore(db_url=url).init()
+        await s.close()
+
+    # Must not raise UniqueViolationError on any of the concurrent initializers.
+    await asyncio.gather(*(boot() for _ in range(8)))
+
+
 def test_percentile_nearest_rank():
     vals = [10, 20, 30, 40, 50]
     assert _percentile(vals, 50) == 30
@@ -385,3 +410,102 @@ async def test_draining_set_list_expire_clear(store):
     assert set(await store.list_draining(ts=1012.0)) == {"G::a"}
     await store.clear_draining("G::a")
     assert await store.list_draining(ts=1012.0) == {}
+
+
+@pytest.mark.asyncio
+async def test_instances_live_upsert_list_expire_remove(store):
+    await store.upsert_instance_live(
+        "G::a", "G", "a", "10.0.0.1", 8001, ttl=10, node_id="n1", state="ready", ts=1000.0
+    )
+    await store.upsert_instance_live(
+        "G::b", "G", "b", "10.0.0.2", 8002, ttl=10, node_id="n1", state="ready", ts=1000.0
+    )
+    rows = await store.list_instances_live(ts=1005.0)
+    by_key = {r["key"]: r for r in rows}
+    assert by_key.keys() == {"G::a", "G::b"}
+    assert (by_key["G::a"]["host"], by_key["G::a"]["port"]) == ("10.0.0.1", 8001)
+    assert by_key["G::a"]["group_key"] == "G" and by_key["G::a"]["instance_id"] == "a"
+
+    # Re-publishing refreshes the address + extends the lease (idempotent upsert).
+    await store.upsert_instance_live(
+        "G::a", "G", "a", "10.0.0.9", 8009, ttl=10, node_id="n1", state="ready", ts=1008.0
+    )
+    rows = await store.list_instances_live(ts=1012.0)  # 'b' (exp 1010) gone, 'a' (exp 1018) stays
+    by_key = {r["key"]: r for r in rows}
+    assert by_key.keys() == {"G::a"}
+    assert (by_key["G::a"]["host"], by_key["G::a"]["port"]) == ("10.0.0.9", 8009)
+
+    await store.remove_instance_live("G::a")
+    assert await store.list_instances_live(ts=1012.0) == []
+
+
+@pytest.mark.asyncio
+async def test_prune_instances_live_deletes_expired_rows(store):
+    await store.upsert_instance_live("G::a", "G", "a", "h", 1, ttl=10, ts=1000.0)
+    await store.upsert_instance_live("G::b", "G", "b", "h", 2, ttl=10, ts=1000.0)
+    await store.upsert_instance_live("G::c", "G", "c", "h", 3, ttl=100, ts=1000.0)
+    # At t=1020 a/b (exp 1010) lapsed, c (exp 1100) is live.
+    deleted = await store.prune_instances_live(ts=1020.0)
+    assert deleted == 2
+    rows = await store.list_instances_live(ts=1020.0)
+    assert {r["key"] for r in rows} == {"G::c"}
+
+
+@pytest.mark.asyncio
+async def test_nodes_upsert_list_expire_prune(store):
+    await store.upsert_node("n1", "host1", '[{"index":0}]', ttl=10, ts=1000.0)
+    await store.upsert_node("n2", "host2", None, ttl=10, ts=1000.0)
+    rows = await store.list_nodes(ts=1005.0)
+    by_id = {r["node_id"]: r for r in rows}
+    assert by_id.keys() == {"n1", "n2"}
+    assert by_id["n1"]["hostname"] == "host1" and by_id["n1"]["capacity"] == '[{"index":0}]'
+    # Re-register refreshes the lease + capacity.
+    await store.upsert_node("n1", "host1", '[{"index":0},{"index":1}]', ttl=10, ts=1008.0)
+    rows = await store.list_nodes(ts=1012.0)  # n2 (exp 1010) gone, n1 (exp 1018) stays
+    assert {r["node_id"] for r in rows} == {"n1"}
+    assert await store.prune_nodes(ts=1012.0) == 1  # removes lapsed n2
+    assert {r["node_id"] for r in await store.list_nodes(ts=1012.0)} == {"n1"}
+
+
+@pytest.mark.asyncio
+async def test_instance_observed_upsert_list_expire_prune(store):
+    import json
+    await store.upsert_instance_observed(
+        "G::a", "n1", "ready", json.dumps({"key": "G::a", "state": "ready", "pid": 7}),
+        ttl=10, ts=1000.0,
+    )
+    await store.upsert_instance_observed(
+        "G::b", "n1", "stopped", json.dumps({"key": "G::b", "state": "stopped"}),
+        ttl=10, ts=1000.0,
+    )
+    rows = await store.list_instance_observed(ts=1005.0)
+    by_key = {r["key"]: r for r in rows}
+    assert by_key.keys() == {"G::a", "G::b"}
+    assert by_key["G::a"]["state"] == "ready" and by_key["G::a"]["pid"] == 7
+    assert by_key["G::a"]["node_id"] == "n1"  # node_id merged into the view
+
+    # Re-backfill refreshes state + lease.
+    await store.upsert_instance_observed(
+        "G::a", "n1", "sleeping", json.dumps({"key": "G::a", "state": "sleeping"}),
+        ttl=10, ts=1008.0,
+    )
+    rows = await store.list_instance_observed(ts=1012.0)  # b (exp 1010) filtered out
+    by_key = {r["key"]: r for r in rows}
+    assert by_key.keys() == {"G::a"} and by_key["G::a"]["state"] == "sleeping"
+    assert await store.prune_instance_observed(ts=1012.0) == 1  # deletes lapsed b's row
+    await store.remove_instance_observed("G::a")
+    assert await store.list_instance_observed(ts=1012.0) == []
+
+
+@pytest.mark.asyncio
+async def test_assignments_set_list_delete(store):
+    await store.set_assignment("G::a", "n1")
+    await store.set_assignment("G::b", "n1")
+    await store.set_assignment("H::c", "n2")
+    assert await store.list_assignments() == {"G::a": "n1", "G::b": "n1", "H::c": "n2"}
+    assert await store.list_assignments(node_id="n1") == {"G::a": "n1", "G::b": "n1"}
+    # Re-assigning moves an instance to another node (idempotent upsert).
+    await store.set_assignment("G::a", "n2")
+    assert await store.list_assignments(node_id="n2") == {"G::a": "n2", "H::c": "n2"}
+    await store.delete_assignment("G::a")
+    assert "G::a" not in await store.list_assignments()

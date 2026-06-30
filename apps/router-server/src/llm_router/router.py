@@ -116,7 +116,17 @@ async def ready(request: Request):
             content={"status": "not ready",
                      "reason": "config not loaded" if not config else "starting"},
         )
-    return {"status": "ready", "groups": len(config.get("LLM_engines", {}))}
+    # HA Phase 3e: surface how many instances are routable right now (live addresses
+    # from the shared store). Informational only — readiness is NOT gated on it, so a
+    # fresh cluster with no models started still accepts traffic (and returns a clean
+    # 503/no-instance to clients) rather than every router replica dropping out of
+    # the load balancer. Lets an operator see a stateless replica's view of the fleet.
+    live = getattr(state, "live_addrs", None) or {}
+    return {
+        "status": "ready",
+        "groups": len(config.get("LLM_engines", {})),
+        "routable_instances": len(live),
+    }
 
 
 @router.get("/routing")
@@ -414,8 +424,17 @@ async def _proxy_to_backend(request: Request, upstream_path: str, api_key_name=N
                 instance_id = instance["id"]
                 tried.add(instance_id)
 
+                # HA Phase 3a: route to the instance's live, store-published address
+                # when it has one (set by the node-agent), else the config address.
+                # Collapsed single-host deploys publish 127.0.0.1, so this is a no-op
+                # there; split deploys get cross-network routing for free.
                 host = instance.get("host", "localhost")
                 port = instance["port"]
+                live = getattr(request.app.state, "live_addrs", None)
+                if live:
+                    addr = live.get((model_key, instance_id))
+                    if addr:
+                        host, port = addr
                 target_url = f"http://{host}:{port}{upstream_path}"
 
                 incr_inflight(request.app, model_key, instance_id)

@@ -67,12 +67,18 @@ class ImportRequest(BaseModel):
 
 @router.post("/config/import", dependencies=[Depends(require_admin)])
 async def import_config(
-    body: ImportRequest, force: bool = False, manager: ModelManager = Depends(get_manager)
+    body: ImportRequest, request: Request, force: bool = False,
+    manager: ModelManager = Depends(get_manager),
 ):
     """Replace the whole overlay with an uploaded backup. Validates first; refuses
     (409) if an affected instance is still running unless `force=true`."""
     try:
-        summary = await manager.import_overlay(body.to_overlay(), force=force)
+        summary = await manager.import_overlay(
+            body.to_overlay(), force=force,
+            actor=getattr(request.state, "actor", None),
+            role=getattr(request.state, "role", None),
+            summary=f"{request.method} {request.url.path}",
+        )
     except ConfigInvalid as e:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e))
     except ModelConflict as e:
@@ -141,7 +147,12 @@ async def rollback_version(
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"no version {version_id}")
     try:
-        summary = await manager.import_overlay(json.loads(row["overlay"]), force=force)
+        summary = await manager.import_overlay(
+            json.loads(row["overlay"]), force=force,
+            actor=getattr(request.state, "actor", None),
+            role=getattr(request.state, "role", None),
+            summary=f"{request.method} {request.url.path}",
+        )
     except ConfigInvalid as e:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e))
     except ModelConflict as e:

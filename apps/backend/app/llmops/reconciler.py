@@ -17,6 +17,7 @@ so DB IO never extends the critical section.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import time
@@ -163,8 +164,15 @@ async def _persist(store, transitions: list[Transition], notifier=None, settings
         await emit_transition(store, notifier, settings, inst, frm, to, detail)
 
 
-async def _process_restarts(registry: ModelRegistry, settings: BackendSettings, store, manager) -> None:
-    """Start any crashed-but-wanted instances whose backoff has elapsed."""
+async def _process_restarts(
+    registry: ModelRegistry, settings: BackendSettings, store, manager,
+    foreign: set[str],
+) -> None:
+    """Start any crashed-but-wanted instances whose backoff has elapsed.
+
+    `foreign` (keys owned by another node-agent) is computed once per pass by the
+    caller and excluded here — a different node restarts its own.
+    """
     now = time.time()
     due: list[tuple[str, int]] = []
     async with registry.lock:
@@ -173,6 +181,7 @@ async def _process_restarts(registry: ModelRegistry, settings: BackendSettings, 
                 inst.state == ModelState.FAILED
                 and inst.desired == Desired.RUNNING
                 and inst.managed
+                and inst.key not in foreign
                 and inst.next_restart_at is not None
                 and now >= inst.next_restart_at
                 and inst.restart_count < settings.max_restarts
@@ -190,6 +199,69 @@ async def _process_restarts(registry: ModelRegistry, settings: BackendSettings, 
             logger.warning("Auto-restart of %s failed: %s", key, e)
 
 
+async def _backfill_node_state(
+    registry: ModelRegistry, store, settings: BackendSettings,
+    transitions: list[Transition], foreign: set[str],
+) -> None:
+    """The node-agent's writeback to the shared store, for the instances it owns:
+
+    - HA 3a: each READY instance's routable address (instances_live) so any router
+      routes over the network; deregistered the moment it leaves READY.
+    - HA 3d: every instance's full observed state (instance_observed) so any
+      control-plane replica can assemble the same fleet view from the DB.
+
+    `foreign` keys are owned by another node-agent and skipped (that agent writes
+    them). On a single host nothing is foreign, so this writes the whole registry —
+    behaviour unchanged. No-op when the store can't track live addresses."""
+    if store is None or not hasattr(store, "upsert_instance_live"):
+        return
+    for inst, frm, to, _detail in transitions:
+        if frm == ModelState.READY and to != ModelState.READY:
+            try:
+                await store.remove_instance_live(inst.key)
+            except Exception:
+                logger.debug("remove_instance_live failed for %s", inst.key, exc_info=True)
+    node_id = settings.instance_id or None
+    has_observed = hasattr(store, "upsert_instance_observed")
+    for inst in registry.values():
+        if inst.key in foreign:
+            continue  # owned by another node-agent
+        # 3a routing address: only READY instances are routable.
+        if inst.state == ModelState.READY:
+            host = settings.node_host or inst.host
+            group, _, instance_id = inst.key.partition("::")
+            try:
+                await store.upsert_instance_live(
+                    key=inst.key, group_key=group, instance_id=instance_id,
+                    host=host, port=inst.port, ttl=settings.live_ttl,
+                    node_id=node_id, state=inst.state.value,
+                )
+            except Exception:
+                logger.debug("upsert_instance_live failed for %s", inst.key, exc_info=True)
+        # 3d observed: full state for every owned instance, in any state.
+        if has_observed:
+            try:
+                await store.upsert_instance_observed(
+                    key=inst.key, node_id=node_id, state=inst.state.value,
+                    view=json.dumps(inst.observed_dict()), ttl=settings.live_ttl,
+                )
+            except Exception:
+                logger.debug("upsert_instance_observed failed for %s", inst.key, exc_info=True)
+    # Sweep rows whose lease lapsed — e.g. left by a crashed/restarted agent whose
+    # READY->stop transition this process never saw — so the tables show only live
+    # state rather than relying on read-time filtering alone.
+    if hasattr(store, "prune_instances_live"):
+        try:
+            await store.prune_instances_live()
+        except Exception:
+            logger.debug("prune_instances_live failed", exc_info=True)
+    if hasattr(store, "prune_instance_observed"):
+        try:
+            await store.prune_instance_observed()
+        except Exception:
+            logger.debug("prune_instance_observed failed", exc_info=True)
+
+
 async def reconcile_once(
     registry: ModelRegistry, http_client, settings: BackendSettings, store=None,
     manager=None, notifier=None,
@@ -202,6 +274,12 @@ async def reconcile_once(
         )
     transitions = [t for sub in results for t in sub]
     await _persist(store, transitions, notifier, settings)
+    # Compute node ownership once per pass: keys owned by another node-agent are
+    # neither written back nor actuated by us. Empty on a single host.
+    foreign: set[str] = set()
+    if manager is not None and hasattr(manager, "foreign_assignments"):
+        foreign = await manager.foreign_assignments()
+    await _backfill_node_state(registry, store, settings, transitions, foreign)
     # An LLM instance that just turned READY may be a newly-added overlay
     # instance the router doesn't know about yet. Nudge it to re-read config so
     # the instance joins its load-balancing pool — only now that it's actually
@@ -221,7 +299,7 @@ async def reconcile_once(
     ):
         await manager.write_prometheus_targets()
     if manager is not None and settings.auto_restart:
-        await _process_restarts(registry, settings, store, manager)
+        await _process_restarts(registry, settings, store, manager, foreign)
 
 
 async def adopt_running(

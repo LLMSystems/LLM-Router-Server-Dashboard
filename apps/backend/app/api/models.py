@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.api.deps import get_manager
@@ -51,8 +51,14 @@ class CreateModelRequest(BaseModel):
 
 
 @router.get("", response_model=list[ModelView])
-async def list_models(manager: ModelManager = Depends(get_manager)):
-    return [ModelView.from_instance(i) for i in await manager.list()]
+async def list_models(request: Request, manager: ModelManager = Depends(get_manager)):
+    # HA Phase 3d: a non-leader replica reports the fleet from the shared store's
+    # observed state (the leader/owning agents backfill it), since its own registry
+    # is idle. The leader (and a single-host collapsed deploy) uses its live
+    # registry — identical to before.
+    elector = getattr(request.app.state, "leader", None)
+    prefer_store = elector is not None and not elector.is_leader
+    return [ModelView(**v) for v in await manager.fleet_views(prefer_store=prefer_store)]
 
 
 @router.post("/parse", dependencies=[Depends(require_operator)])

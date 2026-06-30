@@ -174,14 +174,45 @@ desired,不再直接碰進程。**單機先 collapsed**(agent 與控制平面同
 
 ## 分階段執行（建議順序）
 
-| 子階段 | 產出 | 單機先 collapsed? | 風險 |
-|---|---|---|---|
-| **3a** 實例位址入庫 + router 讀 DB | 解開 netns 耦合 | ✅ localhost 不變 | 中 |
-| **3b** node-agent 抽出 | spawn 與控制平面分離 | ✅ 同容器 | **高**(核心執行模型) |
-| **3d** observed 入庫 + 控制平面無狀態 | 控制平面可多副本 | ✅ | 中高 |
-| **3c** 跨節點排程 | 真多節點 | — | 高 |
-| **3e** router 多副本 | router 水平擴 | — | 低 |
-| **3f** k8s 部署 | 一鍵多節點 | — | 中 |
+| 子階段 | 產出 | 單機先 collapsed? | 風險 | 狀態 |
+|---|---|---|---|---|
+| **3a** 實例位址入庫 + router 讀 DB | 解開 netns 耦合 | ✅ localhost 不變 | 中 | ✅ 已完成（live 驗） |
+| **3b** node-agent 抽出 | spawn 與控制平面分離 | ✅ 同容器 | **高**(核心執行模型) | ✅ 已完成（3b-1 節點註冊/assignments；3b-2 ownership-gated actuation + 心跳自癒） |
+| **3d** observed 入庫 + 控制平面無狀態 | 控制平面可多副本 | ✅ | 中高 | ✅ 已完成（3d-1 observed 回填；3d-2 follower 讀 DB 組裝視圖，**雙副本 live 驗**） |
+| **3c** 跨節點排程 | 真多節點 | — | 高 | ✅ 已完成（greedy by free VRAM + 死節點重指派；多節點為 unit test，單機 no-op） |
+| **3e** router 多副本 | router 水平擴 | — | 低 | ✅ 已完成（router 無狀態、`/ready` 報 routable 數，**第二副本 live 驗**） |
+| **3f** k8s 部署 | 一鍵多節點 | — | 中 | ✅ Helm chart 已完成（`deploy/helm/vllmux`,lint + 雙 profile render 過;無 cluster 不能 live 裝） |
 
-> 起手式建議:**3a**(風險中、解開最關鍵的 netns 耦合,且單機完全不變)。確認 router 能從 DB 讀位址
-> 路由後,再評估是否投入 3b 這塊核心重構。
+> 起手式建議:**3a**…(已完成)。
+
+## 實作狀態（2026-06）
+
+3a–3e **全部落地**、SQLite + Postgres 雙跑測試通過、單機 collapsed 行為逐位元不變,並做了
+**雙 backend 副本**(follower 從 DB 讀 fleet)與**雙 router 副本**(共享 store 讀路由)的 live 驗證。
+
+**netns 解耦也完成了**:`LLMOPS_VLLM_BIND_HOST`(opt-in,預設空=綁 localhost 不變)讓 vLLM 綁可路由
+介面(如 `0.0.0.0`),搭配 `LLMOPS_NODE_HOST`(廣播給 router 連的可路由位址,寫進 `instances_live`)。
+只改 `--host` 綁定位址;本機健康探針與 record 仍走 localhost。**已 docker live 驗**:bind=0.0.0.0 +
+node_host=backend 時,vLLM 廣播 `backend:8002`,**別的 netns 的容器連得到 `/health`,而且一個獨立 netns
+(不共享 backend)的第二個 router 能真的跑通 `/v1/chat/completions`** —— 即「跨 netns inference」這件
+原本做不到的事現在 work 了。
+
+**3f Helm chart 已完成**(`deploy/helm/vllmux`):backend StatefulSet(穩定 pod 身分 = `LLMOPS_INSTANCE_ID`、
+GPU、`bindAll`+pod IP 廣播)、router Deployment(無狀態水平擴 + `/health` `/ready` 探針)、bundled Postgres
+StatefulSet(或外部 DSN)、Service/Ingress,附 `values-collapsed` / `values-split` 兩種 profile。已 `helm lint`
++ 雙 profile render + YAML 結構驗證通過(env 順序、downward API、DSN 都對);**沒有 k8s cluster 所以無法 live 裝**。
+
+**唯一還沒做的**:真・多節點 inference —— 需要**真實的多 GPU 主機**才測得起來、才有意義(單機 GPU-less
+副本起不了模型),且 backend 多副本目前是「控制平面 HA(leader + 暖備接管)」而非「並行 GPU 工作節點」
+(每個 backend pod 各跑自己那份 fleet 需要 per-node actuation)。**完整設計藍圖**見
+[ha-per-node-actuation-design_zh-CN.md](ha-per-node-actuation-design_zh-CN.md)(collapsed-first 分階段、
+各元件改法、失敗情境;等有實體多機環境再實作)。
+
+換言之:**控制平面 HA(狀態外移、leader、雙副本讀寫、跨節點排程、router 水平擴、vLLM 可路由綁定、
+k8s 打包)全部完成且驗過**;只差「真多 GPU 主機 + per-node actuation」這層 —— 那要有實體多機環境才推進。
+
+> ⚠️ 綁 `0.0.0.0` 會把 vLLM 暴露到 localhost 以外,只在可信/內網環境使用。
+
+> **節點身分建議**:多節點部署請給每台設**穩定**的 `LLMOPS_INSTANCE_ID`(預設 `hostname:pid` 會
+> 隨重啟改變)。assignments 已對「指派到已死節點」做自癒回收,但穩定 id 讓 nodes/leader/assignment
+> 更易讀、failover 更乾淨。

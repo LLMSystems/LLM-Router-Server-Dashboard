@@ -143,3 +143,70 @@ async def test_import_force_stops_running_then_applies(tmp_path):
     summary = await mgr.import_overlay(overlay, force=True)
     assert summary["changed"] == ["Qwen3-0.6B::a"]
     assert mgr.registry.get("Qwen3-0.6B::a").port == 9999
+
+
+class _DBStore:
+    """A Postgres-mode store stub: db_url is set, and it logs config-version writes
+    into a shared events list so we can assert ordering vs the router reload."""
+
+    def __init__(self, events):
+        self.db_url = "postgresql://x"
+        self.events = events
+        self.versions = []
+
+    async def record_config_version(self, *, overlay, sha256, actor=None, role=None, summary=None):
+        self.events.append(("snapshot", actor, summary))
+        self.versions.append(overlay)
+        return len(self.versions)
+
+
+def _db_manager(tmp_path):
+    """Like _manager but with a Postgres-mode store + a shared event log; FakeHTTP's
+    /reload posts land in the same log so we can assert snapshot-before-reload."""
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text(CONFIG_YAML, encoding="utf-8")
+    overlay_path = tmp_path / "overlay.json"
+    config = load_config(str(cfg_path))
+    launchers = [VllmLauncher(), EmbeddingLauncher()]
+    registry = build_registry(config, str(cfg_path), launchers)
+
+    events = []
+    http = FakeHTTP()
+    orig_post = http.post
+
+    async def logging_post(url, *a, **k):
+        events.append(("reload", url))
+        return await orig_post(url, *a, **k)
+
+    http.post = logging_post
+    mgr = ModelManager(
+        registry, launchers, http, config, str(cfg_path),
+        BackendSettings(), store=_DBStore(events), overlay_path=str(overlay_path),
+        router_url="http://router",
+    )
+    return mgr, events
+
+
+async def test_import_snapshots_to_db_before_router_reload(tmp_path):
+    # HA regression: in Postgres mode the rolled-back/imported overlay must be
+    # persisted to the DB *before* the router reload, or the router re-hydrates the
+    # shared overlay file from the DB's stale latest and clobbers the import.
+    mgr, events = _db_manager(tmp_path)
+    await mgr.import_overlay(
+        _overlay_with_extra_group(), actor="alice", role="admin", summary="POST /x"
+    )
+    kinds = [e[0] for e in events]
+    assert "snapshot" in kinds and "reload" in kinds
+    assert kinds.index("snapshot") < kinds.index("reload")
+    # Snapshot carried the caller's attribution + the actual imported overlay.
+    snap = next(e for e in events if e[0] == "snapshot")
+    assert snap[1] == "alice"
+    assert "Extra" in mgr.store.versions[-1]
+
+
+async def test_import_skips_db_snapshot_in_sqlite_mode(tmp_path):
+    # store=None (SQLite/no-store): no extra snapshot path; the request middleware
+    # handles versioning. Must not raise and must still reload the router.
+    mgr, _ = _manager(tmp_path)  # store=None
+    summary = await mgr.import_overlay(_overlay_with_extra_group())
+    assert "Extra::x" in summary["added"]

@@ -22,16 +22,17 @@ logger = logging.getLogger("llmops.config_versions")
 _MUTATING = {"POST", "PUT", "PATCH", "DELETE"}
 
 
-def overlay_blob_and_hash() -> tuple[str, str]:
+def overlay_blob_and_hash(path: str | None = None) -> tuple[str, str]:
     """Canonical (sorted) JSON of the current overlay + its sha256, so identical
     content always yields an identical hash regardless of on-disk formatting."""
-    blob = json.dumps(load_overlay(), sort_keys=True, ensure_ascii=False)
+    blob = json.dumps(load_overlay(path), sort_keys=True, ensure_ascii=False)
     return blob, hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
-async def snapshot_overlay(store, *, actor=None, role=None, summary=None) -> int | None:
+async def snapshot_overlay(store, *, actor=None, role=None, summary=None,
+                           path: str | None = None) -> int | None:
     """Persist a version row if the overlay differs from the latest snapshot."""
-    blob, digest = overlay_blob_and_hash()
+    blob, digest = overlay_blob_and_hash(path)
     return await store.record_config_version(
         overlay=blob, sha256=digest, actor=actor, role=role, summary=summary
     )

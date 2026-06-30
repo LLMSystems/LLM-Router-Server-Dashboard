@@ -1,0 +1,127 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "vllmux.fullname" . }}-router
+  labels:
+    {{- include "vllmux.labels" . | nindent 4 }}
+    app.kubernetes.io/component: router
+spec:
+  type: {{ .Values.router.service.type }}
+  selector:
+    {{- include "vllmux.labels" . | nindent 4 }}
+    app.kubernetes.io/component: router
+  ports:
+    - name: http
+      port: {{ .Values.router.service.port }}
+      targetPort: 8887
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "vllmux.fullname" . }}-router
+  labels:
+    {{- include "vllmux.labels" . | nindent 4 }}
+    app.kubernetes.io/component: router
+spec:
+  replicas: {{ .Values.router.replicas }}
+  selector:
+    matchLabels:
+      {{- include "vllmux.labels" . | nindent 6 }}
+      app.kubernetes.io/component: router
+  template:
+    metadata:
+      labels:
+        {{- include "vllmux.labels" . | nindent 8 }}
+        app.kubernetes.io/component: router
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      terminationGracePeriodSeconds: {{ .Values.router.terminationGracePeriodSeconds }}
+      containers:
+        - name: router
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          workingDir: /app/apps/router-server
+          command: ["gunicorn", "src.llm_router.main:app", "-c", "configs/gunicorn.conf.py"]
+          ports:
+            - name: http
+              containerPort: 8887
+          env:
+            {{- if .Values.postgres.enabled }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vllmux.secretName" . }}
+                  key: postgres-password
+            {{- end }}
+            {{- $db := include "vllmux.dbUrl" . }}
+            {{- if $db }}
+            - name: LLMOPS_DB_URL
+              value: {{ $db | quote }}
+            {{- end }}
+            # The router validates bearer tokens / SSO cookies with the same secrets.
+            - name: LLMOPS_ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vllmux.secretName" . }}
+                  key: admin-token
+            - name: LLMOPS_SESSION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vllmux.secretName" . }}
+                  key: session-secret
+            - name: LLMOPS_REQUIRE_API_KEY
+              value: {{ .Values.router.authRequired | quote }}
+            - name: ROUTER_WORKERS
+              value: {{ .Values.router.workers | quote }}
+            - name: CONFIG_PATH
+              value: /app/packages/config-schema/config.yaml
+            - name: LLMOPS_OVERLAY_PATH
+              value: /app/data/dynamic_models.json
+            - name: LLMOPS_DB_PATH
+              value: /app/data/llmops.db
+            {{- with .Values.router.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          volumeMounts:
+            - name: config
+              mountPath: /app/packages/config-schema/config.yaml
+              subPath: config.yaml
+            - name: data
+              mountPath: /app/data
+          # /health = liveness (process up); /ready = readiness (config loaded), so
+          # a rolling update holds traffic until the new replica can route.
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8887
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8887
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.router.resources | nindent 12 }}
+      {{- with .Values.router.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.router.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.router.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "vllmux.configMapName" . }}
+        - name: data
+          emptyDir: {}

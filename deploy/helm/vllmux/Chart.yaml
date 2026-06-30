@@ -1,0 +1,20 @@
+apiVersion: v2
+name: vllmux
+description: >-
+  vLLMux control plane on Kubernetes — the HA backend (model lifecycle +
+  leader-elected scheduler), the stateless OpenAI/Anthropic router (horizontally
+  scalable), and an optional bundled Postgres shared store. Packages HA Phase 3:
+  state in the shared DB, leader election, observed-state fan-out, cross-node
+  placement, router scale-out, and routable vLLM binding.
+type: application
+version: 0.1.0
+appVersion: "0.2.0"
+keywords:
+  - vllm
+  - llm
+  - inference
+  - router
+  - ha
+home: https://github.com/milk333445/LLM-Router-Server-Dashboard
+maintainers:
+  - name: vLLMux

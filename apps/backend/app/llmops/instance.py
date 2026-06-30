@@ -77,6 +77,28 @@ class ModelInstance:
     last_log_size: int = 0
     last_progress_at: Optional[float] = None
 
+    def observed_dict(self) -> dict:
+        """A JSON-serialisable snapshot of this instance's observed state — the
+        fields the dashboard's model view needs. The node-agent backfills this to
+        the shared store (HA Phase 3d) so any control-plane replica can assemble the
+        same fleet view from the DB rather than its own in-memory registry."""
+        return {
+            "key": self.key,
+            "kind": self.kind.value,
+            "model_tag": self.model_tag,
+            "host": self.host,
+            "port": self.port,
+            "state": self.state.value,
+            "desired": self.desired.value,
+            "managed": self.managed,
+            "pid": self.pid,
+            "last_error": self.last_error,
+            "started_at": self.started_at,
+            "ready_at": self.ready_at,
+            "updated_at": self.updated_at,
+            "restart_count": self.restart_count,
+        }
+
     def touch(self) -> None:
         self.updated_at = time.time()
 
