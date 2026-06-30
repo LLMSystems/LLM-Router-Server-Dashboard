@@ -120,6 +120,38 @@ class ModelManager:
         """The launcher that owns an instance, by its (kind, engine)."""
         return self._launchers[(inst.kind, inst.engine)]
 
+    def _node_can_run(self, engine: str) -> bool:
+        """Whether THIS node can run an engine (its image has it). Empty
+        node_engines = unspecified = runs any (collapsed single host / single-engine
+        deploys: always True, so the sync actuation path below is unchanged)."""
+        ne = self.settings.node_engines
+        return not ne or engine in ne
+
+    async def _defer_to_owner(self, inst: ModelInstance, desired: Desired) -> ModelInstance:
+        """HA Phase 7C: this node can't run `inst`'s engine, so don't actuate locally —
+        just record the intent and let the scheduler place it on an engine-matching
+        node, whose reconcile loop converges it. Returns the instance (state unchanged
+        here; the dashboard tracks progress via observed state from the owning node)."""
+        async with self.registry.lock:
+            inst.desired = desired
+            inst.touch()
+        if self.store is not None:
+            try:
+                await self.store.set_instance_desired(inst.key, desired.value)
+            except Exception:
+                logger.warning("defer: failed to persist desired for %s", inst.key, exc_info=True)
+            # Clear any assignment so the engine-aware scheduler places it fresh on a
+            # node that can actually run it (it would reassign anyway, but this avoids
+            # a transient wrong-node attempt).
+            if desired != Desired.STOPPED and hasattr(self.store, "delete_assignment"):
+                try:
+                    await self.store.delete_assignment(inst.key)
+                except Exception:
+                    logger.debug("defer: clear assignment failed for %s", inst.key, exc_info=True)
+        logger.info("Deferred %s (engine=%s) to an engine-matching node (desired=%s)",
+                    inst.key, inst.engine, desired.value)
+        return inst
+
     def _llm_engine_capabilities(self, group: str) -> frozenset:
         """Capabilities of the engine an LLM group is configured for. Callers gate
         optional features (sleep, runtime LoRA, …) on these rather than the engine
@@ -378,6 +410,10 @@ class ModelManager:
 
     async def start(self, key: str, force: bool = False, reset_restart: bool = True) -> ModelInstance:
         inst = self._require(key)
+        # HA Phase 7C: if this node can't run the engine, write intent and let an
+        # engine-matching node actuate it (collapsed/single-engine: always can-run).
+        if not self._node_can_run(inst.engine):
+            return await self._defer_to_owner(inst, Desired.RUNNING)
         launcher = self._launcher_for(inst)
 
         # Re-resolve the spec (config may have changed) outside the lock so the
@@ -432,6 +468,9 @@ class ModelManager:
 
     async def stop(self, key: str) -> ModelInstance:
         inst = self._require(key)
+        # HA Phase 7C: not our engine -> record desired=stopped; the owning node stops it.
+        if not self._node_can_run(inst.engine):
+            return await self._defer_to_owner(inst, Desired.STOPPED)
 
         async with self.registry.lock:
             prev = inst.state
@@ -483,6 +522,8 @@ class ModelManager:
         The HTTP call runs outside the registry lock; on failure the desired
         intent is reverted so the reconciler doesn't fight a half-applied state."""
         inst = self._require(key)
+        if not self._node_can_run(inst.engine):  # HA Phase 7C: owning node sleeps it
+            return await self._defer_to_owner(inst, Desired.ASLEEP)
         if not getattr(inst.spec, "sleep_enabled", False):
             raise ModelConflict(
                 f"{key} was not launched with sleep mode "
@@ -522,6 +563,8 @@ class ModelManager:
         """Wake a SLEEPING instance back to READY (vLLM /wake_up reloads weights to
         GPU). Seconds, not a cold start."""
         inst = self._require(key)
+        if not self._node_can_run(inst.engine):  # HA Phase 7C: owning node wakes it
+            return await self._defer_to_owner(inst, Desired.RUNNING)
         async with self.registry.lock:
             if inst.state != ModelState.SLEEPING:
                 raise ModelConflict(

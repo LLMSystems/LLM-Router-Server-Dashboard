@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import os
 import socket
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 
@@ -132,6 +132,11 @@ class BackendSettings:
     # The live address is heartbeated each reconcile pass; live_ttl is its lease.
     node_host: str = ""
     live_ttl: float = 30.0
+    # HA Phase 7: which engines this node can actually run (determined by its image —
+    # the vLLM image runs vllm, the SGLang image runs sglang). Advertised in the
+    # node registry so the scheduler places each model on an engine-matching node.
+    # Empty/unset = unspecified => runs any engine (collapsed single host: unchanged).
+    node_engines: list[str] = field(default_factory=list)
 
     # HA Phase 3b: node-agent heartbeat. node_id reuses instance_id (the same id
     # used for the leader lease and live-address node_id). The agent re-registers
@@ -198,6 +203,9 @@ class BackendSettings:
             or f"{socket.gethostname()}:{os.getpid()}",
             leader_lease_ttl=_env_float("LLMOPS_LEADER_LEASE_TTL", 15.0),
             node_host=os.environ.get("LLMOPS_NODE_HOST", "").strip(),
+            node_engines=[
+                e.strip() for e in os.environ.get("LLMOPS_NODE_ENGINES", "").split(",") if e.strip()
+            ],
             live_ttl=_env_float("LLMOPS_LIVE_TTL", 30.0),
             node_heartbeat_interval=_env_float("LLMOPS_NODE_HEARTBEAT_INTERVAL", 10.0),
             node_ttl=_env_float("LLMOPS_NODE_TTL", 30.0),

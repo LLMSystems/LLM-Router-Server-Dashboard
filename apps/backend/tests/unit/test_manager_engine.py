@@ -208,3 +208,64 @@ def _write_min_cfg(tmp_path):
     p = tmp_path / "c.yaml"
     p.write_text("server:\n  port: 8887\nLLM_engines: {}\n", encoding="utf-8")
     return str(p)
+
+
+# ---- HA Phase 7C: API write-intent when this node can't run the engine -------
+
+from app.llmops.launchers import SglangLauncher  # noqa: E402
+from app.llmops.state import Desired, ModelState  # noqa: E402
+
+
+class _DesiredRecordingStore:
+    def __init__(self):
+        self.desired: dict[str, str] = {}
+        self.deleted_assignments: list[str] = []
+
+    async def set_instance_desired(self, key, val): self.desired[key] = val
+    async def delete_assignment(self, key): self.deleted_assignments.append(key)
+
+
+SGLANG_ONLY_YAML = """
+server:
+  port: 8887
+LLM_engines:
+  S:
+    instances: [{ id: a, host: localhost, port: 8100 }]
+    model_config: { model_tag: org/s, engine: sglang }
+"""
+
+
+def _mgr_node_engines(tmp_path, node_engines):
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(SGLANG_ONLY_YAML, encoding="utf-8")
+    config = load_config(str(cfg))
+    launchers = [VllmLauncher(), SglangLauncher(), EmbeddingLauncher()]
+    registry = build_registry(config, str(cfg), launchers)
+    store = _DesiredRecordingStore()
+    mgr = ModelManager(registry, launchers, None, config, str(cfg),
+                       BackendSettings(node_engines=node_engines), store=store,
+                       overlay_path=str(tmp_path / "o.json"))
+    return mgr, store
+
+
+async def test_start_defers_when_node_cannot_run_engine(tmp_path):
+    # A vLLM-only node asked to start a SGLang model: write intent, do NOT spawn.
+    mgr, store = _mgr_node_engines(tmp_path, ["vllm"])
+    inst = await mgr.start("S::a")
+    assert inst.state == ModelState.STOPPED        # never spawned locally
+    assert inst.desired == Desired.RUNNING         # intent recorded
+    assert store.desired["S::a"] == "running"
+    assert "S::a" in store.deleted_assignments     # cleared so scheduler re-places
+
+
+async def test_node_can_run_all_when_unspecified(tmp_path):
+    # No node_engines = runs any engine -> _node_can_run True (collapsed unchanged).
+    mgr, _ = _mgr_node_engines(tmp_path, [])
+    assert mgr._node_can_run("sglang") is True
+    assert mgr._node_can_run("vllm") is True
+
+
+async def test_node_can_run_respects_advertised(tmp_path):
+    mgr, _ = _mgr_node_engines(tmp_path, ["vllm"])
+    assert mgr._node_can_run("vllm") is True
+    assert mgr._node_can_run("sglang") is False

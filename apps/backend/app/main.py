@@ -201,7 +201,7 @@ async def lifespan(app: FastAPI):
             ),
             asyncio.create_task(autoscaler_loop(app, manager, settings.autoscale_interval)),
             asyncio.create_task(
-                Scheduler().run(store, settings, settings.schedule_interval)
+                Scheduler(registry).run(store, settings, settings.schedule_interval)
             ),
             asyncio.create_task(_audit_prune_loop(store, settings.audit_max_rows)),
             asyncio.create_task(_config_versions_prune_loop(store, settings.config_versions_max)),
