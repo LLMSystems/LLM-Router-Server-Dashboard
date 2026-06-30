@@ -100,13 +100,20 @@
 
 ## 5. 分階段執行（collapsed-first、每步單機 0 行為改變）
 
-| 子階段 | 產出 | 單機 collapsed? | 風險 |
-|---|---|---|---|
-| **A** 把 reconcile 的「desired→observed 收斂(start/stop/sleep/wake)」抽成一個函式 | 邏輯就位,仍 leader 跑、行為不變 | ✅ | 中 |
-| **B** un-leader-gate reconcile(每 node 跑)、ownership-scoped | follower 開始收斂自己擁有的(單機沒有 follower → 不變) | ✅ | 中高(改執行模型) |
-| **C** API/autoscaler 改寫 desired/assignment(非同步收斂)+ 保留軟預檢 | 寫入與執行解耦 | ✅(owning=self) | 高(API 時序/預檢語意) |
-| **D** scheduler 加 node 拒絕回饋 + 重指派 | 放置自我修正 | — | 中 |
-| **E** 真多 GPU 主機 live 驗:並行起模型、node failover 接管 | 真並行多節點 | — | 需實體多機 |
+| 子階段 | 產出 | 單機 collapsed? | 風險 | 狀態 |
+|---|---|---|---|---|
+| **A** 把 reconcile 的「desired→observed 收斂(start/stop/sleep/wake)」抽成一個函式 | 邏輯就位,仍 leader 跑、行為不變 | ✅ | 中 | ✅ 已完成 |
+| **B** un-leader-gate reconcile(每 node 跑)、ownership-scoped | follower 開始收斂自己擁有的(單機沒有 follower → 不變) | ✅ | 中高(改執行模型) | ✅ 已完成 |
+| **C** API/autoscaler 改寫 desired/assignment(非同步收斂)+ 保留軟預檢 | 寫入與執行解耦 | ✅(owning=self) | 高(API 時序/預檢語意) | ⬜ |
+| **D** scheduler 加 node 拒絕回饋 + 重指派 | 放置自我修正 | — | 中 | ⬜ |
+| **E** 真多 GPU 主機 live 驗:並行起模型、node failover 接管 | 真並行多節點 | — | 需實體多機 | ⬜ |
+
+> **A+B 已完成**([reconciler.py](../apps/backend/app/llmops/reconciler.py) `converge_desired` +
+> [main.py](../apps/backend/app/main.py) 迴圈拆分):reconcile/actuation + gpu-poll 移到 lifespan(每 node 跑);
+> scheduler / autoscaler / load-monitor / prune 留 leader-only。`converge_desired` 對 owned(非 foreign)實例做
+> desired→observed 收斂(STOPPED→start、live→stop、ready→sleep、sleeping→wake;FAILED 留給 `_process_restarts`)。
+> 單機 collapsed 行為不變(唯一 node=leader=全擁有);全測 407 綠 + live collapsed 起模型→READY 驗過。
+> 多 node 收斂以 fake 多 node unit test(foreign 排除等)覆蓋。剩 C/D(寫意圖解耦 + 排程拒絕回饋)與 E(實體多機)。
 
 > 每一步:**單機先過既有全套測試 0 退化**、SQLite + Postgres 雙驗;多 node 邏輯以 fake 多 node 寫 unit test。
 > A→D 都能在單機完成且行為不變;**E 一定要有第二台 GPU 主機**才驗得起來。
