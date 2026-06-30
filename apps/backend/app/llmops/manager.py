@@ -366,6 +366,18 @@ class ModelManager:
                     base[v["key"]] = v
             except Exception:
                 logger.warning("fleet_views: failed to read observed from store", exc_info=True)
+            # Overlay the *authoritative* desired intent (instance_desired, written
+            # immediately by whichever replica took the API call) over the observed
+            # desired, which lags until the owning node's reconcile converges. Without
+            # this the dashboard briefly sees desired=running + state=ready after a
+            # stop and flickers ready->stopped. Best-effort.
+            try:
+                desired = await self.store.list_instance_desired()
+                for key, want in desired.items():
+                    if key in base:
+                        base[key]["desired"] = want
+            except Exception:
+                logger.debug("fleet_views: failed to overlay desired", exc_info=True)
         return list(base.values())
 
     async def get(self, key: str) -> ModelInstance:
