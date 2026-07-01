@@ -56,11 +56,35 @@ class PerfManager:
                     return key, engine
         return None
 
+    @staticmethod
+    def _tokenizer_tag(engine, model_tag: str) -> str:
+        """The HF id evalscope should load a tokenizer from (to synthesize/count
+        tokens for the random dataset).
+
+        For vLLM/SGLang the model_tag is a full HF repo that ships a tokenizer, so it
+        is used as-is. llama.cpp serves GGUF repos that usually ship NO HF tokenizer
+        (e.g. Qwen/Qwen2.5-0.5B-Instruct-GGUF has none), which makes evalscope's
+        AutoTokenizer fail. So prefer an explicit `tokenizer` override on the group,
+        else derive the base repo by stripping a conventional GGUF suffix (+ any
+        :quant) — which resolves to the tokenizer-bearing base for org-published
+        GGUFs (…-Instruct-GGUF -> …-Instruct)."""
+        override = getattr(engine.settings, "tokenizer", None)
+        if override:
+            return str(override)
+        if getattr(engine.settings, "engine", "vllm") != "llamacpp":
+            return model_tag
+        tag = str(model_tag).split(":", 1)[0]  # drop any :QUANT
+        for suf in ("-GGUF", "-gguf", ".gguf"):
+            if tag.endswith(suf):
+                return tag[: -len(suf)]
+        return tag
+
     def _resolve(self, group: str, target: str, instance_key: str | None):
         """Return (model_field, url) for the benchmark, plus the tokenizer tag.
 
         `group` may be a base model group or a LoRA served name (routed over its
-        base group's instances). The tokenizer always uses the base model_tag."""
+        base group's instances). The tokenizer uses the base model_tag (or, for
+        GGUF/llama.cpp, its derived base — see _tokenizer_tag)."""
         engine = self.manager.config.LLM_engines.get(group)
         is_lora = False
         if engine is None:
@@ -82,7 +106,7 @@ class PerfManager:
         else:
             base = self.router_url
             model_field = group  # router routes by group key or LoRA served name
-        return model_field, base, model_tag
+        return model_field, base, self._tokenizer_tag(engine, model_tag)
 
     def _resolve_embedding(self, name: str, mode: str, target: str):
         """Resolve an embedding/rerank model to (model_field, base_url, tokenizer).

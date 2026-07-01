@@ -42,6 +42,35 @@ def test_build_cfg_router_target(tmp_path):
     assert cfg["api_key"] == "adm"  # admin token avoids rate limiting
 
 
+def test_tokenizer_tag_llamacpp_derives_base_repo():
+    # GGUF repos ship no HF tokenizer, so evalscope must load the base model's.
+    tt = PerfManager._tokenizer_tag
+    E = lambda **kw: SimpleNamespace(settings=SimpleNamespace(**kw))
+    # llama.cpp: strip a conventional -GGUF suffix (and any :quant) -> base repo.
+    assert tt(E(engine="llamacpp"), "Qwen/Qwen2.5-0.5B-Instruct-GGUF") == "Qwen/Qwen2.5-0.5B-Instruct"
+    assert tt(E(engine="llamacpp"), "org/Foo-GGUF:Q4_K_M") == "org/Foo"
+    # explicit override wins over derivation.
+    assert tt(E(engine="llamacpp", tokenizer="org/base"), "x-GGUF") == "org/base"
+    # vLLM/SGLang model_tag is a full HF repo — used as-is.
+    assert tt(E(engine="vllm"), "Qwen/Qwen2.5-3B-Instruct") == "Qwen/Qwen2.5-3B-Instruct"
+    assert tt(E(), "Qwen/Qwen2.5-3B-Instruct") == "Qwen/Qwen2.5-3B-Instruct"  # engine defaults vllm
+
+
+def test_build_cfg_llamacpp_tokenizer_is_base(tmp_path):
+    engine = SimpleNamespace(
+        settings=SimpleNamespace(model_tag="Qwen/Qwen2.5-0.5B-Instruct-GGUF", engine="llamacpp"),
+        instances=[SimpleNamespace(id="a", port=8091)],
+    )
+    fake_mgr = SimpleNamespace(config=SimpleNamespace(LLM_engines={"gguf-grp": engine}, embedding_server=None))
+    pm = PerfManager(None, fake_mgr, BackendSettings(admin_token="adm"), str(tmp_path), "http://127.0.0.1:8887")
+    cfg = pm._build_cfg(
+        {"model": "gguf-grp", "target": "router", "dataset": "random", "parallel": [1], "number": [4]},
+        str(tmp_path / "1"),
+    )
+    assert cfg["model"] == "gguf-grp"  # router routes by group key
+    assert cfg["tokenizer_path"] == "Qwen/Qwen2.5-0.5B-Instruct"  # base repo, not the GGUF one
+
+
 def test_build_cfg_instance_target_uses_port_and_tag(tmp_path):
     pm = _manager(tmp_path)
     cfg = pm._build_cfg(

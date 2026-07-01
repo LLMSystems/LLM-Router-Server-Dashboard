@@ -247,6 +247,19 @@ llama.cpp 串流**不帶 `stream_options.include_usage` 就完全沒有 usage**(
 usage chunk)。**唯一注意**:`/v1/messages`(Anthropic)不注入此欄(見 L381 註解),但那條路徑本來就不吃
 llama.cpp 的 OpenAI usage;走 `/v1/chat/completions` 即可。router proxy 全程零修改。
 
+## 9b. 壓測 / 評測(evalscope)—— GGUF tokenizer 修正(已 live 驗證)
+
+- **評測(eval,accuracy)**:走 `eval_type=openai_api`,打模型 API、伺服器端 tokenize,**不需本地 tokenizer**
+  → llamacpp **零改即可用**(live:gsm8k limit=5 completed,score 正常)。
+- **壓測(perf,evalscope)**:evalscope 用 `tokenizer_path` 在本地合成/計數 token,原本 = `model_tag`。
+  llama.cpp 的 `model_tag` 是 **GGUF repo(不帶 HF tokenizer)** → `AutoTokenizer` 掛掉
+  (`Qwen/…-GGUF` 無 tokenizer 檔)。**修法**([perf/manager.py](../apps/backend/app/perf/manager.py)
+  `_tokenizer_tag`):llamacpp 的 tokenizer 改用**基座 repo**——優先取 group 上的 `tokenizer` 覆寫,否則剝掉
+  `-GGUF`/`.gguf` 後綴(+ 任何 `:quant`)得到基座(`Qwen/Qwen2.5-0.5B-Instruct-GGUF` → `…-Instruct`)。
+  vLLM/SGLang 不受影響(model_tag 本就是完整 HF repo)。**Live 驗證**:修後 sweep(parallel=2/number=8)
+  success 8/8、rps 5.0、ttft 137ms。**注意**:第三方命名不符 `<base>-GGUF` 慣例的 repo,請在 group 設
+  `tokenizer: <base-repo>` 顯式覆寫。
+
 ## 10. capabilities 總表(對照)
 
 | capability | vLLM | SGLang | **llamacpp** |
