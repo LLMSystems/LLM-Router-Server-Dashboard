@@ -35,6 +35,7 @@ import type {
   GpuProcess,
   HealthZ,
   LogResponse,
+  LoraConvertJob,
   LoraDownloadJob,
   LoraLibraryInfo,
   ModelStartupMetrics,
@@ -416,6 +417,13 @@ export const api = {
     request<LoraDownloadJob>(API_BASE, '/api/lora/downloads', {
       method: 'POST',
       body: JSON.stringify({ repo_id: repoId, name }),
+    }),
+  listLoraConversions: () =>
+    request<{ available: boolean; jobs: LoraConvertJob[] }>(API_BASE, '/api/lora/conversions'),
+  convertLoraToGguf: (name: string, baseModel?: string) =>
+    request<LoraConvertJob>(API_BASE, `/api/lora/${name}/convert`, {
+      method: 'POST',
+      body: JSON.stringify({ base_model: baseModel }),
     }),
 
   // ---- Benchmark datasets (ModelScope cache) --------------------------------

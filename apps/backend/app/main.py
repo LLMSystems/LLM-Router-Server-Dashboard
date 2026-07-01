@@ -48,6 +48,7 @@ from app.eval.manager import EvalManager
 from app.perf.manager import PerfManager
 from app.services.dataset_downloads import DatasetDownloadManager
 from app.services.downloads import DownloadManager
+from app.services.lora_convert import LoraConvertManager
 from app.services.lora_downloads import LoraDownloadManager
 from app.services.gpu_service import get_gpu_processes_with_info
 from app.services.overlay import build_merged_config, hydrate_overlay_from_store, overlay_path
@@ -149,6 +150,7 @@ async def lifespan(app: FastAPI):
     app.state.download_manager = DownloadManager()
     app.state.dataset_download_manager = DatasetDownloadManager()
     app.state.lora_download_manager = LoraDownloadManager()
+    app.state.lora_convert_manager = LoraConvertManager()
     perf_root = os.path.join(os.path.dirname(store.db_path), "perf")
     app.state.perf_manager = PerfManager(store, manager, settings, perf_root, router_url)
     eval_root = os.path.join(os.path.dirname(store.db_path), "eval")

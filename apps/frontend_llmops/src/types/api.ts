@@ -220,12 +220,25 @@ export interface LoraAdapter {
   alpha: number | null
   target_modules: string[]
   size_on_disk: number
+  format?: 'peft' | 'gguf'
 }
 
 export interface LoraLibraryInfo {
   disk: DiskUsage
   root: string
   adapters: LoraAdapter[]
+  convert_available?: boolean
+}
+
+export interface LoraConvertJob {
+  name: string
+  base_model: string | null
+  outtype: string
+  state: 'pending' | 'converting' | 'completed' | 'failed'
+  out_path: string | null
+  error: string | null
+  started_at: number
+  updated_at: number
 }
 
 export interface LoraDownloadJob {

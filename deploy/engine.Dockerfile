@@ -18,6 +18,23 @@ COPY apps/router-server/requirements.txt /tmp/router-req.txt
 RUN sed -i -E '/^(vllm|pytest.*)$/d' /tmp/router-req.txt \
     && pip install --no-cache-dir -r /tmp/backend-req.txt -r /tmp/router-req.txt
 
+# Vendored llama.cpp PEFT->GGUF LoRA converter (for the LoRA library's "Convert to
+# GGUF" action, so a HF adapter can be used by the llama.cpp engine). We vendor the
+# scripts + gguf-py from a PINNED tag (matched to the llama-server build) rather than
+# `pip install gguf`, because (a) the `conversion` package that convert_lora_to_gguf
+# imports isn't on PyPI, and (b) keeping gguf out of site-packages and on a scoped
+# PYTHONPATH guarantees the lib matches the scripts and can't perturb vLLM's deps.
+# torch/transformers/safetensors come from the base image. See docs/mixed-engine-deployment.md.
+ARG LLAMACPP_CONVERT_TAG=b9853
+RUN curl -sL "https://github.com/ggml-org/llama.cpp/archive/refs/tags/${LLAMACPP_CONVERT_TAG}.tar.gz" \
+      | tar xz -C /tmp \
+    && mkdir -p /opt/llamacpp-convert \
+    && cp -r "/tmp/llama.cpp-${LLAMACPP_CONVERT_TAG}/convert_lora_to_gguf.py" \
+            "/tmp/llama.cpp-${LLAMACPP_CONVERT_TAG}/conversion" \
+            "/tmp/llama.cpp-${LLAMACPP_CONVERT_TAG}/gguf-py" /opt/llamacpp-convert/ \
+    && rm -rf "/tmp/llama.cpp-${LLAMACPP_CONVERT_TAG}"
+ENV LLMOPS_LORA_CONVERT_DIR=/opt/llamacpp-convert
+
 # App code + shared packages + the gunicorn conf the router boots from. The paths
 # mirror the repo so the in-code sys.path bootstrap (repo root = 4 levels up from
 # the module) and the config/overlay/db default paths still resolve to /app.

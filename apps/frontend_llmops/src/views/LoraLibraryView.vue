@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import { computed, onMounted, onBeforeUnmount, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Boxes, Cpu, Download, HardDrive, Layers, Loader2, Trash2 } from '@lucide/vue'
+import { Boxes, Cpu, Download, FileCog, HardDrive, Layers, Loader2, Trash2 } from '@lucide/vue'
 import { api, ApiError } from '@/lib/api'
 import { useAuth } from '@/composables/useAuth'
 import { toast } from '@/lib/toast'
 import { formatBytes } from '@/lib/utils'
-import type { LoraDownloadJob, LoraLibraryInfo } from '@/types/api'
+import type { LoraAdapter, LoraConvertJob, LoraDownloadJob, LoraLibraryInfo } from '@/types/api'
 import Card from '@/components/ui/Card.vue'
 import Button from '@/components/ui/Button.vue'
 import Input from '@/components/ui/Input.vue'
@@ -18,10 +18,28 @@ const { ensureUnlocked } = useAuth()
 
 const lib = ref<LoraLibraryInfo | null>(null)
 const downloads = ref<LoraDownloadJob[]>([])
+const conversions = ref<LoraConvertJob[]>([])
 const repoInput = ref('')
 const nameInput = ref('')
 const starting = ref(false)
 let poll: ReturnType<typeof setInterval> | null = null
+
+// A GGUF version of a PEFT adapter already exists in the library (so we can hide the
+// convert button once done). llama.cpp GGUF loras land as "<name>-<outtype>.gguf".
+const ggufNames = computed(
+  () => new Set((lib.value?.adapters ?? []).filter((a) => a.format === 'gguf').map((a) => a.name)),
+)
+function convertJobFor(name: string): LoraConvertJob | undefined {
+  return conversions.value.find((j) => j.name === name)
+}
+function canConvert(a: LoraAdapter): boolean {
+  // Only PEFT folders convert; skip if a GGUF for it already exists.
+  return (
+    !!lib.value?.convert_available &&
+    a.format !== 'gguf' &&
+    !ggufNames.value.has(`${a.name}-f16`)
+  )
+}
 
 const diskPct = computed(() => {
   const d = lib.value?.disk
@@ -48,10 +66,33 @@ async function loadLib() {
 async function loadDownloads() {
   try {
     const prevActive = activeDownloads.value.length
+    const prevConverting = conversions.value.filter((c) => c.state === 'converting' || c.state === 'pending').length
     downloads.value = await api.listLoraDownloads()
-    if (prevActive > 0 && activeDownloads.value.length < prevActive) await loadLib()
+    conversions.value = (await api.listLoraConversions()).jobs
+    const nowConverting = conversions.value.filter((c) => c.state === 'converting' || c.state === 'pending').length
+    // Reload the adapter list when a download or conversion just finished (a new
+    // folder / .gguf appeared).
+    if ((prevActive > 0 && activeDownloads.value.length < prevActive) ||
+        (prevConverting > 0 && nowConverting < prevConverting)) {
+      await loadLib()
+    }
   } catch {
     /* transient — keep last good state */
+  }
+}
+
+async function convert(name: string) {
+  if (!(await ensureUnlocked())) return
+  try {
+    await api.convertLoraToGguf(name)
+    toast.success(t('loraLibrary.convertStarted', { name }), {
+      description: t('loraLibrary.convertStartedDesc'),
+    })
+    await loadDownloads()
+  } catch (e) {
+    toast.error(t('loraLibrary.convertFailed'), {
+      description: e instanceof ApiError ? `${e.status}: ${e.message}` : String(e),
+    })
   }
 }
 
@@ -203,18 +244,34 @@ onBeforeUnmount(() => {
                 <Cpu class="size-3 shrink-0" />{{ a.base_model ?? $t('loraLibrary.unknownBase') }}
               </p>
             </div>
-            <Button
-              size="icon-sm"
-              variant="ghost"
-              class="opacity-0 transition group-hover:opacity-100"
-              :title="$t('common.delete')"
-              @click="remove(a.name)"
-            >
-              <Trash2 class="size-4" />
-            </Button>
+            <div class="flex shrink-0 items-center gap-1">
+              <!-- Convert PEFT -> GGUF so the llama.cpp engine can load it. -->
+              <Button
+                v-if="canConvert(a)"
+                size="icon-sm"
+                variant="ghost"
+                class="opacity-0 transition group-hover:opacity-100"
+                :disabled="convertJobFor(a.name)?.state === 'converting' || convertJobFor(a.name)?.state === 'pending'"
+                :title="$t('loraLibrary.convertToGguf')"
+                @click="convert(a.name)"
+              >
+                <Loader2 v-if="convertJobFor(a.name)?.state === 'converting' || convertJobFor(a.name)?.state === 'pending'" class="size-4 animate-spin" />
+                <FileCog v-else class="size-4" />
+              </Button>
+              <Button
+                size="icon-sm"
+                variant="ghost"
+                class="opacity-0 transition group-hover:opacity-100"
+                :title="$t('common.delete')"
+                @click="remove(a.name)"
+              >
+                <Trash2 class="size-4" />
+              </Button>
+            </div>
           </div>
 
           <div class="mt-3 flex flex-wrap gap-1.5">
+            <Badge v-if="a.format === 'gguf'" variant="outline" class="text-[10px] text-[var(--chart-3)]">GGUF</Badge>
             <Badge v-if="a.rank != null" variant="outline" class="text-[10px]">rank {{ a.rank }}</Badge>
             <Badge v-if="a.alpha != null" variant="muted" class="text-[10px]">α {{ a.alpha }}</Badge>
             <Badge v-for="t in a.target_modules.slice(0, 3)" :key="t" variant="muted" class="font-mono text-[10px]">
@@ -222,6 +279,17 @@ onBeforeUnmount(() => {
             </Badge>
             <Badge v-if="a.target_modules.length > 3" variant="muted" class="text-[10px]">+{{ a.target_modules.length - 3 }}</Badge>
           </div>
+
+          <!-- GGUF conversion status (PEFT adapters only) -->
+          <p
+            v-if="convertJobFor(a.name) && convertJobFor(a.name)!.state !== 'completed' && a.format !== 'gguf'"
+            class="mt-2 flex items-center gap-1.5 text-[11px]"
+            :class="convertJobFor(a.name)!.state === 'failed' ? 'text-status-failed' : 'text-muted-foreground'"
+          >
+            <Loader2 v-if="convertJobFor(a.name)!.state !== 'failed'" class="size-3 animate-spin" />
+            <template v-if="convertJobFor(a.name)!.state === 'failed'">{{ $t('loraLibrary.convertFailed') }}: {{ convertJobFor(a.name)!.error }}</template>
+            <template v-else>{{ $t('loraLibrary.converting') }}</template>
+          </p>
 
           <dl class="mt-3 grid grid-cols-2 gap-x-3 gap-y-1.5 text-xs">
             <div>
